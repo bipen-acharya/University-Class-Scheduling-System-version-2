@@ -16,8 +16,9 @@ import {
   UserCog,
   CalendarDays,
   Building2,
-  Layers
+  Layers,
 } from "lucide-react";
+import api from "../../api/axios";
 
 export default function AdminLayout() {
   const location = useLocation();
@@ -74,8 +75,17 @@ export default function AdminLayout() {
 
   const isActive = (path: string) => location.pathname === path;
 
-  const handleLogout = () => {
-    navigate("/");
+  const handleLogout = async () => {
+    try {
+      await api.post("/logout");
+    } catch (error) {
+      console.error("Logout API failed:", error);
+    } finally {
+      localStorage.removeItem("token");
+      localStorage.removeItem("user_name");
+      localStorage.removeItem("roles");
+      navigate("/login", { replace: true });
+    }
   };
 
   const formatTime = (date: Date) => {
@@ -113,13 +123,20 @@ export default function AdminLayout() {
       >
         <div className="p-4 lg:p-6 border-b border-light">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-primary-blue rounded-xl flex items-center justify-center flex-shrink-0">
-              <GraduationCap className="w-6 h-6 text-white" />
+            {/* Logo - Full Circular */}
+            <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0">
+              <img
+                src="/favicon.png"
+                alt="UniScheduling Logo"
+                className="w-full h-full object-cover"
+              />
             </div>
+
+            {/* Text */}
             <div
               className={`${isSidebarCollapsed ? "lg:hidden" : "lg:block"} md:hidden block`}
             >
-              <h1 className="text-lg text-dark">UniScheduling</h1>
+              <h1 className="text-lg text-dark font-semibold">UniScheduling</h1>
               <p className="text-xs text-body">Admin Panel</p>
             </div>
           </div>

@@ -276,7 +276,7 @@ export default function Dashboard() {
         });
         if (res.data.status === 1) setRoomBookings(res.data.data || []);
       } catch (e) {
-        // keep silent or add a message if you want
+        // keep silent or show message if you want
       } finally {
         setLoadingRoomBookings(false);
       }
@@ -293,6 +293,14 @@ export default function Dashboard() {
   /** today info */
   const todayISO = useMemo(() => toISODate(new Date()), []);
   const todayDay = useMemo(() => dayFromDate(todayISO), [todayISO]);
+
+  /** Banner: days remaining */
+  const daysRemaining = useMemo(() => {
+    if (!selectedTrimester) return null;
+    const end = new Date(`${selectedTrimester.end_date}T23:59:59`);
+    const diff = end.getTime() - new Date().getTime();
+    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+  }, [selectedTrimester]);
 
   /** date sessions inside trimester range */
   const dateSessionsInTrimester = useMemo(() => {
@@ -485,29 +493,60 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Header (NO date/trimester line under heading) */}
-      <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
+      {/* ✅ Top Banner: Current Trimester (NO "Dashboard" text) */}
+      <div className="bg-primary-blue rounded-2xl shadow-card-lg p-6 border border-primary-blue text-white">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h1 className="text-2xl text-dark font-semibold">Dashboard</h1>
-            {errorMsg && <p className="text-sm text-red-600 mt-2">{errorMsg}</p>}
+          <div className="flex items-start gap-4">
+            <div className="p-3 bg-white/10 rounded-xl">
+              <CalendarDays className="w-6 h-6 text-white" />
+            </div>
+
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <h3 className="text-lg font-semibold">Current Trimester</h3>
+                <span className="px-3 py-1 bg-white/20 rounded-lg text-xs font-medium">
+                  {selectedTrimester ? selectedTrimester.name : "Not selected"}
+                </span>
+              </div>
+
+              <p className="text-white/80 text-xs">
+                {selectedTrimester
+                  ? `${selectedTrimester.start_date} - ${selectedTrimester.end_date}`
+                  : "Select a trimester to view details"}
+              </p>
+
+              {errorMsg && <p className="text-sm text-red-200 mt-2">{errorMsg}</p>}
+            </div>
           </div>
 
-          {/* Trimester Picker */}
-          <div className="bg-white rounded-xl shadow-card border border-light px-4 py-3">
-            <label className="block text-xs text-body mb-1">Select Trimester *</label>
-            <select
-              value={selectedTrimesterId}
-              onChange={(e) => setSelectedTrimesterId(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
-            >
-              <option value="">{loading ? "Loading..." : "Select Trimester"}</option>
-              {trimesters.map((t) => (
-                <option key={t.id} value={String(t.id)}>
-                  {t.name} ({t.start_date} - {t.end_date})
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+            {/* Days remaining */}
+            <div className="text-center sm:text-right">
+              <p className="text-3xl font-bold text-white">
+                {selectedTrimester ? daysRemaining : "—"}
+              </p>
+              <p className="text-xs text-white/80">Days Remaining</p>
+            </div>
+
+            {/* Trimester Picker */}
+            <div className="bg-white/10 rounded-xl px-4 py-3 border border-white/20">
+              <label className="block text-xs text-white/80 mb-1">Select Trimester *</label>
+              <select
+                value={selectedTrimesterId}
+                onChange={(e) => setSelectedTrimesterId(e.target.value)}
+                className="px-3 py-2 border border-white/20 bg-white/10 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-white/40 text-sm"
+              >
+                <option value="" className="text-dark">
+                  {loading ? "Loading..." : "Select Trimester"}
                 </option>
-              ))}
-            </select>
+
+                {trimesters.map((t) => (
+                  <option key={t.id} value={String(t.id)} className="text-dark">
+                    {t.name} ({t.start_date} - {t.end_date})
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
       </div>
