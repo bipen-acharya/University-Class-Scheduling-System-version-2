@@ -21,7 +21,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
     { id: "classes", label: "Classes", icon: BookOpen },
     { id: "timetable", label: "Timetable", icon: Calendar },
     { id: "gap-finder", label: "Gap Finder", icon: Search },
-    { id: "conflict-checker", label: "Conflict Checker", icon: AlertTriangle },
+    // { id: "conflict-checker", label: "Conflict Checker", icon: AlertTriangle },
     { id: "timesheets", label: "Timesheets", icon: Clock },
     { id: "settings", label: "Settings", icon: Settings },
   ];

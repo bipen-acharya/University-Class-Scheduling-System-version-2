@@ -1,256 +1,371 @@
-import { useState } from 'react';
-import { X, Plus, Trash2, CheckCircle, AlertCircle, Clock, Building2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from "react";
+import { X, Plus, Trash2, CheckCircle, AlertCircle } from "lucide-react";
 
-interface RoomBooking {
+/** =========================
+ * Types (match your new dynamic setup)
+ * ========================= */
+type BookingStatus = "pending" | "approved" | "rejected";
+type EventType = "workshop" | "bootcamp" | "meeting" | "external" | "other";
+type Notifications = "all-staff" | "selected-staff" | "none";
+
+type RoomApi = {
+  id: number;
+  room_name: string;
+  room_type: "lecture_hall" | "lab" | "seminar_room";
+  capacity: number;
+  department?: string | null;
+};
+
+type StaffApi = { id: number; name: string; email: string };
+
+type BookingPayload = {
+  event_name: string;
+  event_type: EventType;
+  room_id: number;
+  booking_date: string; // YYYY-MM-DD
+  start_time: string; // HH:mm
+  end_time: string; // HH:mm
+  organiser_name: string;
+  organiser_email?: string;
+  notifications: Notifications;
+  description?: string;
+  capacity_needed?: number;
+  notes?: string;
+  email_message?: string;
+  equipment?: string[];
+  staff_ids?: number[];
+};
+
+/** UI booking (editing case) */
+interface RoomBookingUI {
   id: string;
   eventName: string;
-  eventType: 'workshop' | 'bootcamp' | 'meeting' | 'external' | 'other';
-  room: string;
+  eventType: EventType;
+  room: string; // room_name
   date: Date;
-  startTime: string;
-  endTime: string;
+  startTime: string; // HH:mm
+  endTime: string; // HH:mm
   organiser: string;
+  organiserEmail?: string;
   department: string;
-  status: 'pending' | 'approved' | 'rejected';
-  notifications: 'all-staff' | 'selected-staff' | 'none';
+  status: BookingStatus;
+  notifications: Notifications;
   selectedStaff?: string[];
   description?: string;
   capacityNeeded?: number;
   equipment?: string[];
   notes?: string;
   emailMessage?: string;
+  staff?: StaffApi[];
+  roomObj?: RoomApi | null;
 }
 
 interface BookingSession {
   id: string;
-  room: string;
-  date: string;
-  startTime: string;
-  endTime: string;
+  room_id: number | "";
+  date: string; // YYYY-MM-DD
+  startTime: string; // HH:mm
+  endTime: string; // HH:mm
   selectedSlot: string | null;
   notes: string;
-  availabilityView: 'slots' | 'schedule';
+  availabilityView: "slots" | "schedule";
 }
 
 interface MultipleBookingsModalProps {
-  booking: RoomBooking | null;
+  rooms: RoomApi[];
+  booking: RoomBookingUI | null;
+  errorMessage?: string;
   onClose: () => void;
-  onSave: (booking: RoomBooking) => void;
+
+  /** IMPORTANT:
+   * parent will call API and return true/false.
+   * - single mode: called once
+   * - multiple mode: called N times (one per session)
+   */
+  onSave: (payload: BookingPayload) => Promise<boolean> | boolean;
 }
 
 const timeSlots = [
-  { id: 'morning-1', label: 'Morning (8:00 - 10:00)', start: '08:00', end: '10:00', period: 'morning' },
-  { id: 'morning-2', label: 'Morning (10:00 - 12:00)', start: '10:00', end: '12:00', period: 'morning' },
-  { id: 'midday-1', label: 'Midday (12:00 - 14:00)', start: '12:00', end: '14:00', period: 'midday' },
-  { id: 'afternoon-1', label: 'Afternoon (14:00 - 16:00)', start: '14:00', end: '16:00', period: 'afternoon' },
-  { id: 'afternoon-2', label: 'Afternoon (16:00 - 18:00)', start: '16:00', end: '18:00', period: 'afternoon' },
-  { id: 'evening-1', label: 'Evening (18:00 - 20:00)', start: '18:00', end: '20:00', period: 'evening' },
+  { id: "morning-1", label: "Morning (8:00 - 10:00)", start: "08:00", end: "10:00", period: "morning" },
+  { id: "morning-2", label: "Morning (10:00 - 12:00)", start: "10:00", end: "12:00", period: "morning" },
+  { id: "midday-1", label: "Midday (12:00 - 14:00)", start: "12:00", end: "14:00", period: "midday" },
+  { id: "afternoon-1", label: "Afternoon (14:00 - 16:00)", start: "14:00", end: "16:00", period: "afternoon" },
+  { id: "afternoon-2", label: "Afternoon (16:00 - 18:00)", start: "16:00", end: "18:00", period: "afternoon" },
+  { id: "evening-1", label: "Evening (18:00 - 20:00)", start: "18:00", end: "20:00", period: "evening" },
 ];
 
-const equipmentOptions = ['Projector', 'Audio', 'Whiteboard', 'Computers', 'Video Conference', 'Microphones'];
+const equipmentOptions = ["Projector", "Audio", "Whiteboard", "Computers", "Video Conference", "Microphones"];
 
-const rooms = [
-  { id: 'r1', name: 'Room 1.1', capacity: 35 },
-  { id: 'r2', name: 'Room 1.2', capacity: 25 },
-  { id: 'r3', name: 'Room 2.1', capacity: 30 },
-  { id: 'r4', name: 'Room 2.2', capacity: 28 },
-  { id: 'r5', name: 'Room 3.1', capacity: 40 },
-  { id: 'r6', name: 'Room 11.1', capacity: 50 },
-  { id: 'r7', name: 'Lecture Hall A', capacity: 100 },
-  { id: 'r8', name: 'Lecture Hall B', capacity: 80 },
-];
+/** helpers */
+function toDateInputValue(d: Date) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
 
-export default function MultipleBookingsModal({ booking, onClose, onSave }: MultipleBookingsModalProps) {
-  const [bookingMode, setBookingMode] = useState<'single' | 'multiple'>('single');
+function isValidTimeRange(start: string, end: string) {
+  if (!start || !end) return false;
+  return start < end;
+}
+
+export default function MultipleBookingsModal({ rooms, booking, errorMessage, onClose, onSave }: MultipleBookingsModalProps) {
+  const [bookingMode, setBookingMode] = useState<"single" | "multiple">(booking ? "single" : "single");
   const [showSummary, setShowSummary] = useState(false);
-  
-  const [formData, setFormData] = useState({
-    eventName: booking?.eventName || '',
-    description: booking?.description || '',
-    eventType: booking?.eventType || 'meeting',
-    department: booking?.department || '',
-    organiser: booking?.organiser || 'Current User',
-    room: booking?.room || '',
-    date: booking?.date ? new Date(booking.date).toISOString().split('T')[0] : '',
-    startTime: booking?.startTime || '',
-    endTime: booking?.endTime || '',
+  const [localError, setLocalError] = useState("");
+
+  const [saving, setSaving] = useState(false);
+
+  // Staff list (if you want to make it dynamic later, pass staffOptions prop)
+  const staffOptions: StaffApi[] = useMemo(() => booking?.staff ?? [], [booking?.staff]);
+
+  // Map UI booking -> room_id for edit
+  const bookingRoomId = useMemo(() => {
+    if (!booking) return "";
+    // try from roomObj first
+    if (booking.roomObj?.id) return booking.roomObj.id;
+    // else match by room_name
+    const match = rooms.find((r) => r.room_name === booking.room);
+    return match?.id ?? "";
+  }, [booking, rooms]);
+
+  const [formData, setFormData] = useState(() => ({
+    eventName: booking?.eventName || "",
+    description: booking?.description || "",
+    eventType: (booking?.eventType || "meeting") as EventType,
+    department: booking?.department || "",
+    organiser: booking?.organiser || "Current User",
+    organiserEmail: booking?.organiserEmail || "",
+
+    room_id: bookingRoomId,
+    date: booking?.date ? toDateInputValue(new Date(booking.date)) : "",
+    startTime: booking?.startTime || "",
+    endTime: booking?.endTime || "",
+
     capacityNeeded: booking?.capacityNeeded || 0,
     equipment: booking?.equipment || [],
-    notifyStaff: booking?.notifications !== 'none',
-    notifications: booking?.notifications || 'none',
-    selectedStaff: booking?.selectedStaff || [],
-    emailMessage: booking?.emailMessage || '',
+
+    notifyStaff: booking ? booking.notifications !== "none" : true,
+    notifications: (booking?.notifications || "all-staff") as Notifications,
+    staff_ids: (booking?.staff ?? []).map((s) => s.id),
+
+    emailMessage: booking?.emailMessage || "",
     separateEmails: false,
-  });
+  }));
+
+  // keep room_id updated once rooms load
+  useEffect(() => {
+    if (booking && bookingRoomId && formData.room_id !== bookingRoomId) {
+      setFormData((p) => ({ ...p, room_id: bookingRoomId }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookingRoomId]);
 
   const [sessions, setSessions] = useState<BookingSession[]>([
     {
-      id: '1',
-      room: '',
-      date: '',
-      startTime: '',
-      endTime: '',
+      id: "1",
+      room_id: "",
+      date: "",
+      startTime: "",
+      endTime: "",
       selectedSlot: null,
-      notes: '',
-      availabilityView: 'slots',
-    }
+      notes: "",
+      availabilityView: "slots",
+    },
   ]);
 
-  const [showConflictWarning, setShowConflictWarning] = useState(false);
   const [conflictingSessions, setConflictingSessions] = useState<string[]>([]);
 
-  // Check for conflicts across sessions
+  /** Conflict check: same room + same date + overlapping time */
   const checkConflicts = () => {
     const conflicts: string[] = [];
     for (let i = 0; i < sessions.length; i++) {
       for (let j = i + 1; j < sessions.length; j++) {
-        const session1 = sessions[i];
-        const session2 = sessions[j];
-        
-        if (session1.date === session2.date && session1.startTime && session2.startTime) {
-          const start1 = new Date(`${session1.date} ${session1.startTime}`);
-          const end1 = new Date(`${session1.date} ${session1.endTime}`);
-          const start2 = new Date(`${session2.date} ${session2.startTime}`);
-          const end2 = new Date(`${session2.date} ${session2.endTime}`);
-          
-          if ((start1 < end2 && end1 > start2)) {
-            conflicts.push(session1.id, session2.id);
+        const a = sessions[i];
+        const b = sessions[j];
+
+        if (!a.date || !b.date || !a.startTime || !a.endTime || !b.startTime || !b.endTime) continue;
+        if (!a.room_id || !b.room_id) continue;
+
+        if (a.date === b.date && a.room_id === b.room_id) {
+          // overlap if startA < endB && endA > startB
+          if (a.startTime < b.endTime && a.endTime > b.startTime) {
+            conflicts.push(a.id, b.id);
           }
         }
       }
     }
-    setConflictingSessions([...new Set(conflicts)]);
-    return conflicts.length === 0;
+    const uniq = [...new Set(conflicts)];
+    setConflictingSessions(uniq);
+    return uniq.length === 0;
   };
 
   const addSession = () => {
-    setSessions([...sessions, {
-      id: Date.now().toString(),
-      room: '',
-      date: '',
-      startTime: '',
-      endTime: '',
-      selectedSlot: null,
-      notes: '',
-      availabilityView: 'slots',
-    }]);
+    setSessions((prev) => [
+      ...prev,
+      { id: Date.now().toString(), room_id: "", date: "", startTime: "", endTime: "", selectedSlot: null, notes: "", availabilityView: "slots" },
+    ]);
   };
 
   const removeSession = (sessionId: string) => {
-    if (sessions.length > 1) {
-      setSessions(sessions.filter(s => s.id !== sessionId));
-      setConflictingSessions(conflictingSessions.filter(id => id !== sessionId));
-    }
+    setSessions((prev) => (prev.length > 1 ? prev.filter((s) => s.id !== sessionId) : prev));
+    setConflictingSessions((prev) => prev.filter((id) => id !== sessionId));
   };
 
   const updateSession = (sessionId: string, updates: Partial<BookingSession>) => {
-    setSessions(sessions.map(s => s.id === sessionId ? { ...s, ...updates } : s));
-    // Recheck conflicts when sessions are updated
-    setTimeout(() => checkConflicts(), 100);
+    setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, ...updates } : s)));
+    setTimeout(() => checkConflicts(), 50);
   };
 
-  const selectTimeSlot = (sessionId: string, slot: typeof timeSlots[0]) => {
-    updateSession(sessionId, {
-      selectedSlot: slot.id,
-      startTime: slot.start,
-      endTime: slot.end,
-    });
+  const selectTimeSlot = (sessionId: string, slot: (typeof timeSlots)[number]) => {
+    updateSession(sessionId, { selectedSlot: slot.id, startTime: slot.start, endTime: slot.end });
   };
 
-  const isSlotAvailable = (slot: typeof timeSlots[0], sessionDate: string) => {
-    // Simulate availability check - randomly mark some as busy
-    const random = Math.random();
-    return random > 0.3; // 70% availability
+  /** NOTE: your real availability should come from API later.
+   * For now: always available.
+   */
+  const isSlotAvailable = () => true;
+
+  const toggleEquipment = (item: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      equipment: prev.equipment.includes(item) ? prev.equipment.filter((e) => e !== item) : [...prev.equipment, item],
+    }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const validateSingle = () => {
+    if (!formData.eventName.trim()) return "Event name is required.";
+    if (!formData.department.trim()) return "Department is required.";
+    if (!formData.room_id) return "Room is required.";
+    if (!formData.date) return "Booking date is required.";
+    if (!formData.startTime || !formData.endTime) return "Start and end time are required.";
+    if (!isValidTimeRange(formData.startTime, formData.endTime)) return "End time must be after start time.";
+    return "";
+  };
+
+  const validateSessions = () => {
+    for (const s of sessions) {
+      if (!s.room_id) return "All sessions must have a room.";
+      if (!s.date) return "All sessions must have a date.";
+      if (!s.startTime || !s.endTime) return "All sessions must have start and end time.";
+      if (!isValidTimeRange(s.startTime, s.endTime)) return "A session has an invalid time range.";
+    }
+    if (!checkConflicts()) return "Some sessions overlap in the same room/date.";
+    return "";
+  };
+
+  const buildPayload = (args: { room_id: number; booking_date: string; start_time: string; end_time: string; notes?: string }) => {
+    const notifications: Notifications = formData.notifyStaff ? formData.notifications : "none";
+
+    return {
+      event_name: formData.eventName,
+      event_type: formData.eventType,
+      room_id: args.room_id,
+      booking_date: args.booking_date,
+      start_time: args.start_time,
+      end_time: args.end_time,
+      organiser_name: formData.organiser,
+      organiser_email: formData.organiserEmail || undefined,
+      notifications,
+      description: formData.description || undefined,
+      capacity_needed: formData.capacityNeeded || undefined,
+      // notes: args.notes || formData.notes || undefined,
+      email_message: formData.emailMessage || undefined,
+      equipment: formData.equipment,
+      staff_ids: notifications === "selected-staff" ? formData.staff_ids : formData.staff_ids, // keep same for now
+    };
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLocalError("");
 
-    if (bookingMode === 'multiple') {
-      if (!checkConflicts()) {
-        alert('Please resolve conflicting sessions before submitting.');
+    if (bookingMode === "multiple") {
+      const err = validateSessions();
+      if (err) {
+        setLocalError(err);
         return;
       }
       setShowSummary(true);
       return;
     }
 
-    // Single booking submission
-    const newBooking: RoomBooking = {
-      id: booking?.id || Date.now().toString(),
-      eventName: formData.eventName,
-      description: formData.description,
-      eventType: formData.eventType as RoomBooking['eventType'],
-      department: formData.department,
-      organiser: formData.organiser,
-      room: formData.room,
-      date: new Date(formData.date),
-      startTime: formData.startTime,
-      endTime: formData.endTime,
-      capacityNeeded: formData.capacityNeeded,
-      equipment: formData.equipment,
-      status: booking?.status || 'pending',
-      notifications: formData.notifyStaff ? formData.notifications as RoomBooking['notifications'] : 'none',
-      selectedStaff: formData.selectedStaff,
-      emailMessage: formData.emailMessage,
-    };
+    const err = validateSingle();
+    if (err) {
+      setLocalError(err);
+      return;
+    }
 
-    onSave(newBooking);
+    setSaving(true);
+    try {
+      const payload = buildPayload({
+        room_id: Number(formData.room_id),
+        booking_date: formData.date,
+        start_time: formData.startTime,
+        end_time: formData.endTime,
+      });
+
+      const ok = await onSave(payload);
+      if (!ok) return; // parent will show errorMessage; we keep modal open
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const confirmMultipleBookings = () => {
-    // Create first booking with reference to multiple sessions
-    const firstSession = sessions[0];
-    const newBooking: RoomBooking = {
-      id: Date.now().toString(),
-      eventName: formData.eventName,
-      description: `${formData.description}\n\n📅 Multiple Sessions (${sessions.length} total)`,
-      eventType: formData.eventType as RoomBooking['eventType'],
-      department: formData.department,
-      organiser: formData.organiser,
-      room: firstSession.room,
-      date: new Date(firstSession.date),
-      startTime: firstSession.startTime,
-      endTime: firstSession.endTime,
-      capacityNeeded: formData.capacityNeeded,
-      equipment: formData.equipment,
-      status: 'pending',
-      notifications: formData.notifyStaff ? formData.notifications as RoomBooking['notifications'] : 'none',
-      selectedStaff: formData.selectedStaff,
-      emailMessage: formData.emailMessage,
-    };
+  const confirmMultipleBookings = async () => {
+    setLocalError("");
+    const err = validateSessions();
+    if (err) {
+      setLocalError(err);
+      setShowSummary(false);
+      return;
+    }
 
-    onSave(newBooking);
-  };
+    setSaving(true);
+    try {
+      // submit each session one by one
+      for (const s of sessions) {
+        const payload = buildPayload({
+          room_id: Number(s.room_id),
+          booking_date: s.date,
+          start_time: s.startTime,
+          end_time: s.endTime,
+          notes: s.notes || undefined,
+        });
 
-  const toggleEquipment = (item: string) => {
-    setFormData(prev => ({
-      ...prev,
-      equipment: prev.equipment.includes(item)
-        ? prev.equipment.filter(e => e !== item)
-        : [...prev.equipment, item]
-    }));
+        const ok = await onSave(payload);
+        if (!ok) {
+          // stop on first failure (overlap etc.)
+          setShowSummary(false);
+          return;
+        }
+      }
+      // if all ok, modal will be closed by parent on success if you want.
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   };
 
   const getTotalHours = () => {
-    return sessions.reduce((total, session) => {
-      if (session.startTime && session.endTime) {
-        const start = new Date(`2000-01-01 ${session.startTime}`);
-        const end = new Date(`2000-01-01 ${session.endTime}`);
+    return sessions.reduce((total, s) => {
+      if (s.startTime && s.endTime) {
+        const start = new Date(`2000-01-01 ${s.startTime}`);
+        const end = new Date(`2000-01-01 ${s.endTime}`);
         const hours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-        return total + hours;
+        return total + (isFinite(hours) ? hours : 0);
       }
       return total;
     }, 0);
   };
 
   const getUniqueRooms = () => {
-    return [...new Set(sessions.map(s => s.room).filter(r => r))];
+    return [...new Set(sessions.map((s) => s.room_id).filter(Boolean))];
   };
 
   const getDateRange = () => {
-    const dates = sessions.map(s => s.date).filter(d => d).sort();
-    if (dates.length === 0) return 'N/A';
+    const dates = sessions.map((s) => s.date).filter(Boolean).sort();
+    if (dates.length === 0) return "N/A";
     if (dates.length === 1) return new Date(dates[0]).toLocaleDateString();
     return `${new Date(dates[0]).toLocaleDateString()} - ${new Date(dates[dates.length - 1]).toLocaleDateString()}`;
   };
@@ -258,21 +373,30 @@ export default function MultipleBookingsModal({ booking, onClose, onSave }: Mult
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
       <div className="bg-white rounded-2xl shadow-card-xl max-w-4xl w-full my-8 max-h-[95vh] overflow-hidden flex flex-col">
+        {/* Header */}
         <div className="p-6 border-b border-light flex items-center justify-between flex-shrink-0">
-          <h3 className="text-lg font-semibold text-dark">
-            {booking ? 'Edit Booking' : 'New Room Booking'}
-          </h3>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-soft rounded-lg transition-colors"
-          >
+          <h3 className="text-lg font-semibold text-dark">{booking ? "Edit Booking" : "New Room Booking"}</h3>
+          <button onClick={onClose} className="p-2 hover:bg-soft rounded-lg transition-colors">
             <X className="w-5 h-5 text-body" />
           </button>
         </div>
 
         <div className="overflow-y-auto flex-1">
           <form onSubmit={handleSubmit} className="p-6 space-y-6">
-            {/* Booking Mode Switch */}
+            {/* Backend error */}
+            {(errorMessage || localError) && (
+              <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+                  <div>
+                    <h4 className="text-sm font-semibold text-red-900 mb-1">Cannot save booking</h4>
+                    <p className="text-sm text-red-800">{errorMessage || localError}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Booking mode (only for new) */}
             {!booking && (
               <div className="p-4 bg-soft rounded-xl border border-light">
                 <label className="text-sm font-semibold text-dark mb-3 block">Booking Mode</label>
@@ -281,8 +405,8 @@ export default function MultipleBookingsModal({ booking, onClose, onSave }: Mult
                     <input
                       type="radio"
                       name="bookingMode"
-                      checked={bookingMode === 'single'}
-                      onChange={() => setBookingMode('single')}
+                      checked={bookingMode === "single"}
+                      onChange={() => setBookingMode("single")}
                       className="w-4 h-4 text-primary-blue border-light focus:ring-2 focus:ring-primary-blue"
                     />
                     <span className="text-sm text-dark">Single Booking</span>
@@ -291,8 +415,8 @@ export default function MultipleBookingsModal({ booking, onClose, onSave }: Mult
                     <input
                       type="radio"
                       name="bookingMode"
-                      checked={bookingMode === 'multiple'}
-                      onChange={() => setBookingMode('multiple')}
+                      checked={bookingMode === "multiple"}
+                      onChange={() => setBookingMode("multiple")}
                       className="w-4 h-4 text-primary-blue border-light focus:ring-2 focus:ring-primary-blue"
                     />
                     <span className="text-sm text-dark">Multiple Bookings</span>
@@ -301,20 +425,15 @@ export default function MultipleBookingsModal({ booking, onClose, onSave }: Mult
               </div>
             )}
 
-            {/* Event Details Section */}
+            {/* Event details */}
             <EventDetailsSection formData={formData} setFormData={setFormData} />
 
-            {/* Conditional Rendering: Single or Multiple Booking Sessions */}
-            {bookingMode === 'single' ? (
-              <SingleBookingForm 
-                formData={formData}
-                setFormData={setFormData}
-                toggleEquipment={toggleEquipment}
-                showConflictWarning={showConflictWarning}
-                setShowConflictWarning={setShowConflictWarning}
-              />
+            {/* Single or Multiple */}
+            {bookingMode === "single" ? (
+              <SingleBookingForm formData={formData} setFormData={setFormData} rooms={rooms} toggleEquipment={toggleEquipment} />
             ) : (
               <MultipleBookingsSessions
+                rooms={rooms}
                 sessions={sessions}
                 updateSession={updateSession}
                 removeSession={removeSession}
@@ -327,54 +446,35 @@ export default function MultipleBookingsModal({ booking, onClose, onSave }: Mult
               />
             )}
 
-            {/* Notification Settings */}
-            <NotificationSettings 
-              formData={formData}
-              setFormData={setFormData}
-              bookingMode={bookingMode}
-            />
+            {/* Notifications */}
+            <NotificationSettings formData={formData} setFormData={setFormData} bookingMode={bookingMode} staffOptions={staffOptions} />
 
-            {/* Conflict Warning */}
-            {conflictingSessions.length > 0 && (
-              <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
-                <div className="flex items-start gap-2">
-                  <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
-                  <div>
-                    <h4 className="text-sm font-semibold text-red-900 mb-1">Session Conflicts Detected</h4>
-                    <p className="text-sm text-red-800">
-                      Some sessions overlap in time. Please adjust the times before submitting.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Action Buttons */}
+            {/* Action buttons */}
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-light">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-5 py-2.5 text-body hover:bg-soft rounded-xl transition-colors"
-              >
+              <button type="button" onClick={onClose} className="px-5 py-2.5 text-body hover:bg-soft rounded-xl transition-colors">
                 Cancel
               </button>
+
               <button
                 type="submit"
-                disabled={bookingMode === 'multiple' && conflictingSessions.length > 0}
+                disabled={saving || (bookingMode === "multiple" && conflictingSessions.length > 0)}
                 className={`px-5 py-2.5 bg-primary-blue text-white rounded-xl hover:bg-blue-600 transition-colors ${
-                  bookingMode === 'multiple' && conflictingSessions.length > 0 ? 'opacity-50 cursor-not-allowed' : ''
+                  saving || (bookingMode === "multiple" && conflictingSessions.length > 0) ? "opacity-50 cursor-not-allowed" : ""
                 }`}
               >
-                {bookingMode === 'multiple' 
-                  ? `Submit Booking Request (${sessions.length} session${sessions.length > 1 ? 's' : ''})`
-                  : booking ? 'Update Booking' : 'Submit Booking Request'
-                }
+                {saving
+                  ? "Saving..."
+                  : bookingMode === "multiple"
+                  ? `Submit Booking Request (${sessions.length} session${sessions.length > 1 ? "s" : ""})`
+                  : booking
+                  ? "Update Booking"
+                  : "Submit Booking Request"}
               </button>
             </div>
           </form>
         </div>
 
-        {/* Booking Summary Modal */}
+        {/* Summary */}
         {showSummary && (
           <div className="absolute inset-0 bg-white rounded-2xl p-6 overflow-y-auto">
             <div className="mb-6">
@@ -411,39 +511,33 @@ export default function MultipleBookingsModal({ booking, onClose, onSave }: Mult
               <div>
                 <p className="text-sm font-medium text-dark mb-3">Sessions</p>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {sessions.map((session, index) => (
-                    <div key={session.id} className="p-3 bg-soft rounded-lg border border-light">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-medium text-dark">Session {index + 1}</p>
-                          <p className="text-xs text-body">
-                            {session.room} • {new Date(session.date).toLocaleDateString()} • {session.startTime} - {session.endTime}
-                          </p>
-                          {session.notes && (
-                            <p className="text-xs text-body mt-1">Note: {session.notes}</p>
-                          )}
-                        </div>
+                  {sessions.map((s, idx) => {
+                    const roomName = rooms.find((r) => r.id === s.room_id)?.room_name ?? "—";
+                    return (
+                      <div key={s.id} className="p-3 bg-soft rounded-lg border border-light">
+                        <p className="text-sm font-medium text-dark">Session {idx + 1}</p>
+                        <p className="text-xs text-body">
+                          {roomName} • {s.date ? new Date(s.date).toLocaleDateString() : "—"} • {s.startTime} - {s.endTime}
+                        </p>
+                        {s.notes && <p className="text-xs text-body mt-1">Note: {s.notes}</p>}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-light">
-              <button
-                type="button"
-                onClick={() => setShowSummary(false)}
-                className="px-5 py-2.5 text-body hover:bg-soft rounded-xl transition-colors"
-              >
+              <button type="button" onClick={() => setShowSummary(false)} className="px-5 py-2.5 text-body hover:bg-soft rounded-xl transition-colors">
                 Back to Edit
               </button>
               <button
                 type="button"
                 onClick={confirmMultipleBookings}
-                className="px-5 py-2.5 bg-primary-blue text-white rounded-xl hover:bg-blue-600 transition-colors"
+                disabled={saving}
+                className={`px-5 py-2.5 bg-primary-blue text-white rounded-xl hover:bg-blue-600 transition-colors ${saving ? "opacity-50 cursor-not-allowed" : ""}`}
               >
-                Confirm & Submit
+                {saving ? "Saving..." : "Confirm & Submit"}
               </button>
             </div>
           </div>
@@ -453,11 +547,14 @@ export default function MultipleBookingsModal({ booking, onClose, onSave }: Mult
   );
 }
 
-// Event Details Section Component
+/** =========================
+ * Sub-components
+ * ========================= */
 function EventDetailsSection({ formData, setFormData }: any) {
   return (
     <div>
       <h4 className="text-sm font-semibold text-dark mb-4">Event Details</h4>
+
       <div className="space-y-4">
         <div>
           <label className="text-sm font-medium text-dark mb-2 block">
@@ -474,9 +571,7 @@ function EventDetailsSection({ formData, setFormData }: any) {
         </div>
 
         <div>
-          <label className="text-sm font-medium text-dark mb-2 block">
-            Event Description
-          </label>
+          <label className="text-sm font-medium text-dark mb-2 block">Event Description</label>
           <textarea
             value={formData.description}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
@@ -504,6 +599,7 @@ function EventDetailsSection({ formData, setFormData }: any) {
               <option value="other">Other</option>
             </select>
           </div>
+
           <div>
             <label className="text-sm font-medium text-dark mb-2 block">
               Organising Department <span className="text-red-500">*</span>
@@ -519,49 +615,48 @@ function EventDetailsSection({ formData, setFormData }: any) {
           </div>
         </div>
 
-        <div>
-          <label className="text-sm font-medium text-dark mb-2 block">
-            Organiser Name
-          </label>
-          <input
-            type="text"
-            value={formData.organiser}
-            onChange={(e) => setFormData({ ...formData, organiser: e.target.value })}
-            className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-soft"
-            readOnly
-          />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-sm font-medium text-dark mb-2 block">Organiser Name</label>
+            <input
+              type="text"
+              value={formData.organiser}
+              onChange={(e) => setFormData({ ...formData, organiser: e.target.value })}
+              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-soft"
+              readOnly
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium text-dark mb-2 block">Organiser Email</label>
+            <input
+              type="email"
+              value={formData.organiserEmail}
+              onChange={(e) => setFormData({ ...formData, organiserEmail: e.target.value })}
+              placeholder="e.g., sarah.johnson@university.edu"
+              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
+            />
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-// Single Booking Form Component
-function SingleBookingForm({ formData, setFormData, toggleEquipment, showConflictWarning, setShowConflictWarning }: any) {
-  const [showAvailability, setShowAvailability] = useState(false);
+function SingleBookingForm({ formData, setFormData, rooms, toggleEquipment }: any) {
+  const showAvailability = Boolean(formData.room_id && formData.date);
 
-  const handleRoomDateChange = () => {
-    if (formData.room && formData.date) {
-      setShowAvailability(true);
-    }
+  const selectTimeSlotSingle = (slot: (typeof timeSlots)[number]) => {
+    setFormData({ ...formData, startTime: slot.start, endTime: slot.end });
   };
 
-  const selectTimeSlot = (slot: typeof timeSlots[0]) => {
-    setFormData({
-      ...formData,
-      startTime: slot.start,
-      endTime: slot.end,
-    });
-  };
-
-  const isSlotAvailable = (slot: typeof timeSlots[0]) => {
-    return Math.random() > 0.3;
-  };
+  const roomObj = rooms.find((r: RoomApi) => r.id === Number(formData.room_id));
 
   return (
     <div className="space-y-6">
       <div>
         <h4 className="text-sm font-semibold text-dark mb-4">Room & Schedule</h4>
+
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -570,32 +665,28 @@ function SingleBookingForm({ formData, setFormData, toggleEquipment, showConflic
               </label>
               <select
                 required
-                value={formData.room}
-                onChange={(e) => {
-                  setFormData({ ...formData, room: e.target.value });
-                  handleRoomDateChange();
-                  setShowConflictWarning(Math.random() > 0.7);
-                }}
+                value={formData.room_id}
+                onChange={(e) => setFormData({ ...formData, room_id: e.target.value ? Number(e.target.value) : "" })}
                 className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
               >
                 <option value="">Select a room</option>
-                {rooms.map((room) => (
-                  <option key={room.id} value={room.name}>
-                    {room.name} (Capacity: {room.capacity})
+                {rooms.map((r: RoomApi) => (
+                  <option key={r.id} value={r.id}>
+                    {r.room_name} (Capacity: {r.capacity})
                   </option>
                 ))}
               </select>
-              {showConflictWarning && formData.room && (
-                <p className="text-xs text-orange-600 mt-1 flex items-center gap-1">
+
+              {roomObj && formData.capacityNeeded > roomObj.capacity && (
+                <p className="text-xs text-red-600 mt-1 flex items-center gap-1">
                   <AlertCircle className="w-3 h-3" />
-                  Room may have conflicts - check availability
+                  Capacity needed is greater than room capacity ({roomObj.capacity})
                 </p>
               )}
             </div>
+
             <div>
-              <label className="text-sm font-medium text-dark mb-2 block">
-                Capacity Needed
-              </label>
+              <label className="text-sm font-medium text-dark mb-2 block">Capacity Needed</label>
               <input
                 type="number"
                 value={formData.capacityNeeded}
@@ -614,50 +705,32 @@ function SingleBookingForm({ formData, setFormData, toggleEquipment, showConflic
               type="date"
               required
               value={formData.date}
-              onChange={(e) => {
-                setFormData({ ...formData, date: e.target.value });
-                handleRoomDateChange();
-              }}
+              onChange={(e) => setFormData({ ...formData, date: e.target.value })}
               className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
             />
           </div>
 
-          {/* Available Time Slots */}
-          {showAvailability && formData.room && formData.date && (
+          {/* Slots (static for now) */}
+          {showAvailability && (
             <div>
-              <label className="text-sm font-medium text-dark mb-3 block">
-                Available Time Options
-              </label>
+              <label className="text-sm font-medium text-dark mb-3 block">Available Time Options</label>
               <div className="grid grid-cols-2 gap-3">
                 {timeSlots.map((slot) => {
-                  const available = isSlotAvailable(slot);
                   const isSelected = formData.startTime === slot.start && formData.endTime === slot.end;
-                  
                   return (
                     <button
                       key={slot.id}
                       type="button"
-                      disabled={!available}
-                      onClick={() => selectTimeSlot(slot)}
+                      onClick={() => selectTimeSlotSingle(slot)}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${
-                        isSelected
-                          ? 'border-primary-blue bg-blue-50'
-                          : available
-                          ? 'border-light hover:border-primary-blue bg-white'
-                          : 'border-light bg-gray-50 cursor-not-allowed opacity-50'
+                        isSelected ? "border-primary-blue bg-blue-50" : "border-light hover:border-primary-blue bg-white"
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1">
-                        <span className={`text-xs font-medium ${
-                          isSelected ? 'text-primary-blue' : available ? 'text-dark' : 'text-body'
-                        }`}>
+                        <span className={`text-xs font-medium ${isSelected ? "text-primary-blue" : "text-dark"}`}>
                           {slot.start} - {slot.end}
                         </span>
-                        {available ? (
-                          <span className="text-xs text-success">Available</span>
-                        ) : (
-                          <span className="text-xs text-body">Busy</span>
-                        )}
+                        {isSelected && <CheckCircle className="w-3 h-3 text-primary-blue" />}
                       </div>
                       <p className="text-xs text-body capitalize">{slot.period}</p>
                     </button>
@@ -667,7 +740,6 @@ function SingleBookingForm({ formData, setFormData, toggleEquipment, showConflic
             </div>
           )}
 
-          {/* Manual Time Entry */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium text-dark mb-2 block">
@@ -681,6 +753,7 @@ function SingleBookingForm({ formData, setFormData, toggleEquipment, showConflic
                 className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
               />
             </div>
+
             <div>
               <label className="text-sm font-medium text-dark mb-2 block">
                 End Time <span className="text-red-500">*</span>
@@ -696,9 +769,7 @@ function SingleBookingForm({ formData, setFormData, toggleEquipment, showConflic
           </div>
 
           <div>
-            <label className="text-sm font-medium text-dark mb-3 block">
-              Equipment Needed
-            </label>
+            <label className="text-sm font-medium text-dark mb-3 block">Equipment Needed</label>
             <div className="grid grid-cols-3 gap-3">
               {equipmentOptions.map((item) => (
                 <label key={item} className="flex items-center gap-2 cursor-pointer">
@@ -719,30 +790,33 @@ function SingleBookingForm({ formData, setFormData, toggleEquipment, showConflic
   );
 }
 
-// Multiple Bookings Sessions Component
-function MultipleBookingsSessions({ 
-  sessions, 
-  updateSession, 
-  removeSession, 
-  addSession, 
-  selectTimeSlot, 
+function MultipleBookingsSessions({
+  rooms,
+  sessions,
+  updateSession,
+  removeSession,
+  addSession,
+  selectTimeSlot,
   isSlotAvailable,
   conflictingSessions,
   formData,
-  toggleEquipment
+  toggleEquipment,
 }: any) {
   return (
     <div className="space-y-6">
       <div>
         <div className="flex items-center justify-between mb-4">
           <h4 className="text-sm font-semibold text-dark">Booking Sessions</h4>
-          <span className="text-xs text-body">{sessions.length} session{sessions.length > 1 ? 's' : ''}</span>
+          <span className="text-xs text-body">
+            {sessions.length} session{sessions.length > 1 ? "s" : ""}
+          </span>
         </div>
 
         <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
           {sessions.map((session: BookingSession, index: number) => (
             <SessionCard
               key={session.id}
+              rooms={rooms}
               session={session}
               index={index}
               updateSession={updateSession}
@@ -765,11 +839,8 @@ function MultipleBookingsSessions({
         </button>
       </div>
 
-      {/* Equipment - Common for All Sessions */}
       <div>
-        <h4 className="text-sm font-semibold text-dark mb-3">
-          Equipment Needed (All Sessions)
-        </h4>
+        <h4 className="text-sm font-semibold text-dark mb-3">Equipment Needed (All Sessions)</h4>
         <div className="grid grid-cols-3 gap-3">
           {equipmentOptions.map((item) => (
             <label key={item} className="flex items-center gap-2 cursor-pointer">
@@ -788,31 +859,24 @@ function MultipleBookingsSessions({
   );
 }
 
-// Session Card Component
-function SessionCard({ 
-  session, 
-  index, 
-  updateSession, 
-  removeSession, 
-  selectTimeSlot, 
+function SessionCard({
+  rooms,
+  session,
+  index,
+  updateSession,
+  removeSession,
+  selectTimeSlot,
   isSlotAvailable,
   isConflicting,
-  canRemove
+  canRemove,
 }: any) {
-  const [showAvailability, setShowAvailability] = useState(false);
-
-  const handleRoomOrDateChange = () => {
-    if (session.room && session.date) {
-      setShowAvailability(true);
-    }
-  };
+  const showAvailability = Boolean(session.room_id && session.date);
 
   return (
-    <div className={`p-4 rounded-xl border-2 ${
-      isConflicting ? 'border-red-300 bg-red-50' : 'border-light bg-white'
-    }`}>
+    <div className={`p-4 rounded-xl border-2 ${isConflicting ? "border-red-300 bg-red-50" : "border-light bg-white"}`}>
       <div className="flex items-center justify-between mb-4">
         <h5 className="text-sm font-semibold text-dark">Session {index + 1}</h5>
+
         {canRemove && (
           <button
             type="button"
@@ -829,34 +893,31 @@ function SessionCard({
         <div className="mb-3 p-2 bg-red-100 border border-red-200 rounded-lg">
           <p className="text-xs text-red-700 flex items-center gap-1">
             <AlertCircle className="w-3 h-3" />
-            This session conflicts with another session
+            This session conflicts with another session (same room + date + time overlap).
           </p>
         </div>
       )}
 
       <div className="space-y-3">
-        {/* Room and Date */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-medium text-dark mb-1.5 block">
               Room <span className="text-red-500">*</span>
             </label>
             <select
-              value={session.room}
-              onChange={(e) => {
-                updateSession(session.id, { room: e.target.value });
-                handleRoomOrDateChange();
-              }}
+              value={session.room_id}
+              onChange={(e) => updateSession(session.id, { room_id: e.target.value ? Number(e.target.value) : "" })}
               className="w-full px-3 py-2 border border-light rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue"
             >
               <option value="">Select room</option>
-              {rooms.map((room) => (
-                <option key={room.id} value={room.name}>
-                  {room.name}
+              {rooms.map((r: RoomApi) => (
+                <option key={r.id} value={r.id}>
+                  {r.room_name} (cap: {r.capacity})
                 </option>
               ))}
             </select>
           </div>
+
           <div>
             <label className="text-xs font-medium text-dark mb-1.5 block">
               Date <span className="text-red-500">*</span>
@@ -864,126 +925,48 @@ function SessionCard({
             <input
               type="date"
               value={session.date}
-              onChange={(e) => {
-                updateSession(session.id, { date: e.target.value });
-                handleRoomOrDateChange();
-              }}
+              onChange={(e) => updateSession(session.id, { date: e.target.value })}
               className="w-full px-3 py-2 border border-light rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue"
             />
           </div>
         </div>
 
-        {/* Availability View Toggle */}
-        {showAvailability && session.room && session.date && (
-          <>
-            <div className="flex items-center gap-1 p-1 bg-soft rounded-lg">
-              <button
-                type="button"
-                onClick={() => updateSession(session.id, { availabilityView: 'slots' })}
-                className={`flex-1 px-3 py-1.5 rounded text-xs transition-colors ${
-                  session.availabilityView === 'slots'
-                    ? 'bg-white text-primary-blue shadow-card'
-                    : 'text-body hover:text-dark'
-                }`}
-              >
-                Time Slots
-              </button>
-              <button
-                type="button"
-                onClick={() => updateSession(session.id, { availabilityView: 'schedule' })}
-                className={`flex-1 px-3 py-1.5 rounded text-xs transition-colors ${
-                  session.availabilityView === 'schedule'
-                    ? 'bg-white text-primary-blue shadow-card'
-                    : 'text-body hover:text-dark'
-                }`}
-              >
-                Schedule View
-              </button>
-            </div>
+        {showAvailability && (
+          <div>
+            <label className="text-xs font-medium text-dark mb-2 block">Available Time Options</label>
+            <div className="grid grid-cols-2 gap-2">
+              {timeSlots.map((slot) => {
+                const available = isSlotAvailable(slot, session.date);
+                const isSelected = session.selectedSlot === slot.id;
 
-            {session.availabilityView === 'slots' ? (
-              <div>
-                <label className="text-xs font-medium text-dark mb-2 block">
-                  Available Time Options
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {timeSlots.map((slot) => {
-                    const available = isSlotAvailable(slot, session.date);
-                    const isSelected = session.selectedSlot === slot.id;
-                    
-                    return (
-                      <button
-                        key={slot.id}
-                        type="button"
-                        disabled={!available}
-                        onClick={() => selectTimeSlot(session.id, slot)}
-                        className={`p-2 rounded-lg border text-left transition-all ${
-                          isSelected
-                            ? 'border-primary-blue bg-blue-50'
-                            : available
-                            ? 'border-light hover:border-primary-blue bg-white'
-                            : 'border-light bg-gray-50 cursor-not-allowed opacity-50'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-0.5">
-                          <span className={`text-xs font-medium ${
-                            isSelected ? 'text-primary-blue' : available ? 'text-dark' : 'text-body'
-                          }`}>
-                            {slot.start} - {slot.end}
-                          </span>
-                          {available && isSelected && (
-                            <CheckCircle className="w-3 h-3 text-primary-blue" />
-                          )}
-                        </div>
-                        <p className="text-xs text-body capitalize">{slot.period}</p>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div>
-                <label className="text-xs font-medium text-dark mb-2 block">
-                  Schedule View
-                </label>
-                <div className="p-4 bg-soft rounded-lg border border-light">
-                  <div className="space-y-2">
-                    <p className="text-xs text-body mb-3">Daily Timeline - {new Date(session.date).toLocaleDateString()}</p>
-                    {timeSlots.map((slot) => {
-                      const available = isSlotAvailable(slot, session.date);
-                      const isSelected = session.selectedSlot === slot.id;
-                      
-                      return (
-                        <button
-                          key={slot.id}
-                          type="button"
-                          disabled={!available}
-                          onClick={() => selectTimeSlot(session.id, slot)}
-                          className={`w-full p-2 rounded text-left transition-all ${
-                            isSelected
-                              ? 'bg-primary-blue text-white'
-                              : available
-                              ? 'bg-white hover:bg-blue-50 border border-light'
-                              : 'bg-gray-100 text-body cursor-not-allowed'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium">{slot.start} - {slot.end}</span>
-                            <span className="text-xs">
-                              {available ? (isSelected ? 'Selected' : 'Available') : 'Busy'}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-          </>
+                return (
+                  <button
+                    key={slot.id}
+                    type="button"
+                    disabled={!available}
+                    onClick={() => selectTimeSlot(session.id, slot)}
+                    className={`p-2 rounded-lg border text-left transition-all ${
+                      isSelected
+                        ? "border-primary-blue bg-blue-50"
+                        : available
+                        ? "border-light hover:border-primary-blue bg-white"
+                        : "border-light bg-gray-50 cursor-not-allowed opacity-50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className={`text-xs font-medium ${isSelected ? "text-primary-blue" : available ? "text-dark" : "text-body"}`}>
+                        {slot.start} - {slot.end}
+                      </span>
+                      {available && isSelected && <CheckCircle className="w-3 h-3 text-primary-blue" />}
+                    </div>
+                    <p className="text-xs text-body capitalize">{slot.period}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
 
-        {/* Manual Time Entry */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-medium text-dark mb-1.5 block">
@@ -996,6 +979,7 @@ function SessionCard({
               className="w-full px-3 py-2 border border-light rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue"
             />
           </div>
+
           <div>
             <label className="text-xs font-medium text-dark mb-1.5 block">
               End Time <span className="text-red-500">*</span>
@@ -1004,16 +988,13 @@ function SessionCard({
               type="time"
               value={session.endTime}
               onChange={(e) => updateSession(session.id, { endTime: e.target.value })}
-              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
+              className="w-full px-3 py-2 border border-light rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue"
             />
           </div>
         </div>
 
-        {/* Session Notes */}
         <div>
-          <label className="text-xs font-medium text-dark mb-1.5 block">
-            Notes (Optional)
-          </label>
+          <label className="text-xs font-medium text-dark mb-1.5 block">Notes (Optional)</label>
           <input
             type="text"
             value={session.notes}
@@ -1027,21 +1008,27 @@ function SessionCard({
   );
 }
 
-// Notification Settings Component
-function NotificationSettings({ formData, setFormData, bookingMode }: any) {
+function NotificationSettings({ formData, setFormData, bookingMode, staffOptions }: any) {
   return (
     <div>
       <h4 className="text-sm font-semibold text-dark mb-4">
         Notification Settings
-        {bookingMode === 'multiple' && <span className="text-xs font-normal text-body ml-2">(Applies to all sessions)</span>}
+        {bookingMode === "multiple" && <span className="text-xs font-normal text-body ml-2">(Applies to all sessions)</span>}
       </h4>
+
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <input
             type="checkbox"
             id="notifyStaff"
             checked={formData.notifyStaff}
-            onChange={(e) => setFormData({ ...formData, notifyStaff: e.target.checked, notifications: e.target.checked ? 'all-staff' : 'none' })}
+            onChange={(e) =>
+              setFormData({
+                ...formData,
+                notifyStaff: e.target.checked,
+                notifications: e.target.checked ? "all-staff" : "none",
+              })
+            }
             className="w-5 h-5 text-primary-blue border-light rounded focus:ring-2 focus:ring-primary-blue"
           />
           <label htmlFor="notifyStaff" className="text-sm font-medium text-dark cursor-pointer">
@@ -1052,9 +1039,7 @@ function NotificationSettings({ formData, setFormData, bookingMode }: any) {
         {formData.notifyStaff && (
           <>
             <div>
-              <label className="text-sm font-medium text-dark mb-2 block">
-                Notification Type
-              </label>
+              <label className="text-sm font-medium text-dark mb-2 block">Notification Type</label>
               <select
                 value={formData.notifications}
                 onChange={(e) => setFormData({ ...formData, notifications: e.target.value })}
@@ -1065,26 +1050,42 @@ function NotificationSettings({ formData, setFormData, bookingMode }: any) {
               </select>
             </div>
 
-            {formData.notifications === 'selected-staff' && (
+            {formData.notifications === "selected-staff" && (
               <div>
-                <label className="text-sm font-medium text-dark mb-2 block">
-                  Select Staff Members
-                </label>
+                <label className="text-sm font-medium text-dark mb-2 block">Select Staff Members</label>
+
                 <div className="p-4 border border-light rounded-xl bg-soft">
-                  <p className="text-xs text-body mb-2">Staff selection interface would go here</p>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="px-3 py-1 bg-white text-dark text-xs rounded-lg border border-light">
-                      Dr. Sarah Johnson
-                    </span>
-                    <span className="px-3 py-1 bg-white text-dark text-xs rounded-lg border border-light">
-                      Prof. Michael Chen
-                    </span>
-                  </div>
+                  {staffOptions.length === 0 ? (
+                    <p className="text-xs text-body">No staff list provided yet. Pass staffOptions from parent to make it dynamic.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {staffOptions.map((u: StaffApi) => {
+                        const checked = formData.staff_ids.includes(u.id);
+                        return (
+                          <label key={u.id} className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setFormData((prev: any) => ({
+                                  ...prev,
+                                  staff_ids: checked ? prev.staff_ids.filter((id: number) => id !== u.id) : [...prev.staff_ids, u.id],
+                                }))
+                              }
+                              className="w-4 h-4 text-primary-blue border-light rounded focus:ring-2 focus:ring-primary-blue"
+                            />
+                            <span className="text-sm text-dark">{u.name}</span>
+                            <span className="text-xs text-body truncate">({u.email})</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {bookingMode === 'multiple' && (
+            {bookingMode === "multiple" && (
               <div className="flex items-center gap-3">
                 <input
                   type="checkbox"
@@ -1100,9 +1101,7 @@ function NotificationSettings({ formData, setFormData, bookingMode }: any) {
             )}
 
             <div>
-              <label className="text-sm font-medium text-dark mb-2 block">
-                Custom Email Message (Optional)
-              </label>
+              <label className="text-sm font-medium text-dark mb-2 block">Custom Email Message (Optional)</label>
               <textarea
                 value={formData.emailMessage}
                 onChange={(e) => setFormData({ ...formData, emailMessage: e.target.value })}

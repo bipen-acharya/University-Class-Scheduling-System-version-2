@@ -1,221 +1,328 @@
-import { useState } from 'react';
-import { 
-  Calendar, 
-  Plus, 
-  Search, 
-  Filter, 
-  MoreVertical, 
-  Eye, 
-  Edit2, 
-  X, 
-  CheckCircle, 
-  XCircle, 
+import { useEffect, useMemo, useState } from "react";
+import api from "../../api/axios";
+import {
+  Calendar,
+  Plus,
+  Search,
+  Eye,
+  Edit2,
+  X,
+  CheckCircle,
+  XCircle,
   Clock,
   Building2,
   Users,
-  Mail,
   ChevronLeft,
   ChevronRight,
   CalendarDays,
   AlertCircle,
-  Trash2
-} from 'lucide-react';
-import MultipleBookingsModal from './MultipleBookingsModal';
+} from "lucide-react";
+import MultipleBookingsModal from "./MultipleBookingsModal";
 
+/** =========================
+ * API types (matches your backend response)
+ * ========================= */
+type BookingStatus = "pending" | "approved" | "rejected";
+type EventType = "workshop" | "bootcamp" | "meeting" | "external" | "other";
+type Notifications = "all-staff" | "selected-staff" | "none";
+
+type RoomApi = {
+  id: number;
+  room_name: string;
+  room_type: "lecture_hall" | "lab" | "seminar_room";
+  capacity: number;
+  department?: string | null;
+};
+
+type StaffApi = { id: number; name: string; email: string };
+
+type RommBookingApi = {
+  id: number;
+  event_name: string;
+  event_type: EventType;
+  room_id: number;
+  room?: RoomApi | null;
+
+  booking_date: string; // e.g. "2026-02-15T00:00:00.000000Z"
+  start_time: string; // e.g. "2026-02-11T09:00:00.000000Z" OR "09:00:00" OR "09:00"
+  end_time: string;
+
+  organiser_name: string;
+  organiser_email?: string | null;
+
+  status: BookingStatus;
+  notifications: Notifications;
+
+  description?: string | null;
+  capacity_needed?: number | null;
+  notes?: string | null;
+  email_message?: string | null;
+
+  equipment?: string[];
+  staff?: StaffApi[];
+
+  created_by?: number | null;
+  approved_by?: number | null;
+
+  created_at?: string;
+  updated_at?: string;
+};
+
+type ApiListResponse<T> = { status: number; message: string; data: T[] };
+type ApiSingleResponse<T> = { status: number; message: string; data: T };
+
+/** =========================
+ * UI type (keeps your component design)
+ * ========================= */
 interface RoomBooking {
   id: string;
   eventName: string;
-  eventType: 'workshop' | 'bootcamp' | 'meeting' | 'external' | 'other';
+  eventType: EventType;
   room: string;
   date: Date;
   startTime: string;
   endTime: string;
   organiser: string;
+
+  // keep department in UI (derive from room.department if you want)
   department: string;
-  status: 'pending' | 'approved' | 'rejected';
-  notifications: 'all-staff' | 'selected-staff' | 'none';
+
+  status: BookingStatus;
+  notifications: Notifications;
+
   selectedStaff?: string[];
   description?: string;
   capacityNeeded?: number;
   equipment?: string[];
   notes?: string;
   emailMessage?: string;
+
+  // extra for dynamic detail
+  roomObj?: RoomApi | null;
+  staff?: StaffApi[];
+  organiserEmail?: string;
 }
 
-const eventTypeColors = {
-  workshop: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
-  bootcamp: { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
-  meeting: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
-  external: { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200' },
-  other: { bg: 'bg-gray-50', text: 'text-gray-700', border: 'border-gray-200' },
+const eventTypeColors: Record<
+  EventType,
+  { bg: string; text: string; border: string }
+> = {
+  workshop: { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
+  bootcamp: { bg: "bg-purple-50", text: "text-purple-700", border: "border-purple-200" },
+  meeting: { bg: "bg-green-50", text: "text-green-700", border: "border-green-200" },
+  external: { bg: "bg-orange-50", text: "text-orange-700", border: "border-orange-200" },
+  other: { bg: "bg-gray-50", text: "text-gray-700", border: "border-gray-200" },
 };
 
-const statusColors = {
-  pending: { bg: 'bg-yellow-50', text: 'text-yellow-700', border: 'border-yellow-200' },
-  approved: { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
-  rejected: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
+const statusColors: Record<
+  BookingStatus,
+  { bg: string; text: string; border: string }
+> = {
+  pending: { bg: "bg-yellow-50", text: "text-yellow-700", border: "border-yellow-200" },
+  approved: { bg: "bg-green-50", text: "text-green-700", border: "border-green-200" },
+  rejected: { bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
 };
 
-const mockBookings: RoomBooking[] = [
-  {
-    id: '1',
-    eventName: 'Web Development Bootcamp - Session 1',
-    eventType: 'bootcamp',
-    room: 'Room 2.1',
-    date: new Date(2025, 0, 28),
-    startTime: '09:00',
-    endTime: '17:00',
-    organiser: 'Dr. Sarah Johnson',
-    department: 'Computer Science',
-    status: 'approved',
-    notifications: 'all-staff',
-    description: 'Intensive web development training for students',
-    capacityNeeded: 30,
-    equipment: ['Projector', 'Audio', 'Computers'],
-  },
-  {
-    id: '2',
-    eventName: 'Faculty Meeting - Q1 Planning',
-    eventType: 'meeting',
-    room: 'Room 1.2',
-    date: new Date(2025, 0, 29),
-    startTime: '14:00',
-    endTime: '16:00',
-    organiser: 'Prof. Michael Chen',
-    department: 'Administration',
-    status: 'approved',
-    notifications: 'selected-staff',
-    selectedStaff: ['Dr. Sarah Johnson', 'Prof. Emily Brown', 'Dr. James Wilson'],
-    description: 'Quarterly planning and budget review',
-    capacityNeeded: 15,
-    equipment: ['Projector', 'Whiteboard'],
-  },
-  {
-    id: '3',
-    eventName: 'Industry Workshop - AI in Healthcare',
-    eventType: 'workshop',
-    room: 'Room 11.1',
-    date: new Date(2025, 0, 30),
-    startTime: '10:00',
-    endTime: '13:00',
-    organiser: 'Dr. Emily Brown',
-    department: 'Health Sciences',
-    status: 'pending',
-    notifications: 'all-staff',
-    description: 'Guest speaker from local hospital on AI applications',
-    capacityNeeded: 50,
-    equipment: ['Projector', 'Audio'],
-  },
-  {
-    id: '4',
-    eventName: 'External Client Presentation',
-    eventType: 'external',
-    room: 'Room 3.1',
-    date: new Date(2025, 1, 2),
-    startTime: '11:00',
-    endTime: '12:30',
-    organiser: 'Dr. James Wilson',
-    department: 'Business School',
-    status: 'pending',
-    notifications: 'none',
-    description: 'Project showcase for external stakeholders',
-    capacityNeeded: 20,
-    equipment: ['Projector', 'Audio', 'Whiteboard'],
-  },
-  {
-    id: '5',
-    eventName: 'Student Council Meeting',
-    eventType: 'meeting',
-    room: 'Room 2.2',
-    date: new Date(2025, 1, 5),
-    startTime: '15:00',
-    endTime: '17:00',
-    organiser: 'Prof. Lisa Anderson',
-    department: 'Student Services',
-    status: 'approved',
-    notifications: 'selected-staff',
-    selectedStaff: ['Student Representatives'],
-    description: 'Monthly student council session',
-    capacityNeeded: 25,
-    equipment: ['Projector'],
-  },
-  {
-    id: '6',
-    eventName: 'Research Seminar - Climate Change',
-    eventType: 'workshop',
-    room: 'Room 1.1',
-    date: new Date(2025, 1, 8),
-    startTime: '13:00',
-    endTime: '15:00',
-    organiser: 'Dr. Robert Taylor',
-    department: 'Environmental Science',
-    status: 'rejected',
-    notifications: 'all-staff',
-    description: 'Presentation of recent research findings',
-    capacityNeeded: 40,
-    equipment: ['Projector', 'Audio'],
-    notes: 'Room unavailable - please select alternative venue',
-  },
-];
+/** =========================
+ * Helpers
+ * ========================= */
+function dateFromApi(value: string): Date {
+  // "2026-02-15" OR "2026-02-15T00:00:00.000000Z"
+  return new Date(value);
+}
 
-const equipmentOptions = ['Projector', 'Audio', 'Whiteboard', 'Computers', 'Video Conference', 'Microphones'];
+function timeFromApi(value: string): string {
+  if (!value) return "";
+  // ISO datetime
+  if (value.includes("T")) {
+    const d = new Date(value);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+  // "09:00:00" -> "09:00"
+  return value.slice(0, 5);
+}
 
-const rooms = [
-  { id: 'r1', name: 'Room 1.1', capacity: 35 },
-  { id: 'r2', name: 'Room 1.2', capacity: 25 },
-  { id: 'r3', name: 'Room 2.1', capacity: 30 },
-  { id: 'r4', name: 'Room 2.2', capacity: 28 },
-  { id: 'r5', name: 'Room 3.1', capacity: 40 },
-  { id: 'r6', name: 'Room 11.1', capacity: 50 },
-  { id: 'r7', name: 'Lecture Hall A', capacity: 100 },
-  { id: 'r8', name: 'Lecture Hall B', capacity: 80 },
-];
+function mapApiToUi(b: RommBookingApi): RoomBooking {
+  const roomName = b.room?.room_name ?? `Room #${b.room_id}`;
+  const dept = b.room?.department ?? "—";
 
+  return {
+    id: String(b.id),
+    eventName: b.event_name,
+    eventType: b.event_type,
+    room: roomName,
+    date: dateFromApi(b.booking_date),
+    startTime: timeFromApi(b.start_time),
+    endTime: timeFromApi(b.end_time),
+    organiser: b.organiser_name,
+    organiserEmail: b.organiser_email ?? undefined,
+    department: dept,
+    status: b.status,
+    notifications: b.notifications,
+    description: b.description ?? undefined,
+    capacityNeeded: b.capacity_needed ?? undefined,
+    equipment: b.equipment ?? [],
+    notes: b.notes ?? undefined,
+    emailMessage: b.email_message ?? undefined,
+    roomObj: b.room ?? null,
+    staff: b.staff ?? [],
+    selectedStaff: (b.staff ?? []).map((u) => u.name),
+  };
+}
+
+type BookingPayload = {
+  event_name: string;
+  event_type: EventType;
+  room_id: number;
+  booking_date: string; // YYYY-MM-DD
+  start_time: string; // HH:mm
+  end_time: string; // HH:mm
+  organiser_name: string;
+  organiser_email?: string;
+  notifications: Notifications;
+  description?: string;
+  capacity_needed?: number;
+  notes?: string;
+  email_message?: string;
+  equipment?: string[];
+  staff_ids?: number[];
+};
+
+/** Parse backend errors like:
+ * { status: 0, message: "..." }
+ * or Laravel 422 { message, errors: { field: [..] } }
+ */
+function parseApiError(err: any): string {
+  const msg = err?.response?.data?.message;
+  const errors = err?.response?.data?.errors;
+  if (errors && typeof errors === "object") {
+    const firstKey = Object.keys(errors)[0];
+    const firstMsg = errors[firstKey]?.[0];
+    return firstMsg || msg || "Request failed.";
+  }
+  return msg || err?.message || "Request failed.";
+}
+
+/** =========================
+ * Component
+ * ========================= */
 export default function RoomBookings() {
-  const [bookings, setBookings] = useState<RoomBooking[]>(mockBookings);
-  const [viewMode, setViewMode] = useState<'table' | 'calendar'>('table');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterRoom, setFilterRoom] = useState('all');
-  const [filterEventType, setFilterEventType] = useState('all');
-  const [filterStatus, setFilterStatus] = useState('all');
+  const token = useMemo(() => localStorage.getItem("token"), []);
+
+  // ✅ dynamic states
+  const [bookings, setBookings] = useState<RoomBooking[]>([]);
+  const [rooms, setRooms] = useState<RoomApi[]>([]);
+
+  // UI states
+  const [viewMode, setViewMode] = useState<"table" | "calendar">("table");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterRoom, setFilterRoom] = useState("all");
+  const [filterEventType, setFilterEventType] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [editingBooking, setEditingBooking] = useState<RoomBooking | null>(null);
   const [selectedBooking, setSelectedBooking] = useState<RoomBooking | null>(null);
 
-  // Filter bookings
-  const filteredBookings = bookings.filter(booking => {
-    const matchesSearch = 
+  const [loadingBookings, setLoadingBookings] = useState(false);
+  const [loadingRooms, setLoadingRooms] = useState(false);
+
+  // page message
+  const [pageError, setPageError] = useState("");
+  const [pageSuccess, setPageSuccess] = useState("");
+
+  // modal message (to show overlap error etc)
+  const [modalError, setModalError] = useState("");
+
+  /** =========================
+   * Fetch Rooms + Bookings
+   * ========================= */
+  const fetchRooms = async () => {
+    setLoadingRooms(true);
+    setPageError("");
+    try {
+      // change endpoint if yours differs
+      const res = await api.get<ApiListResponse<RoomApi>>("/rooms", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.data.status === 1) setRooms(res.data.data || []);
+      else setPageError(res.data.message || "Failed to load rooms.");
+    } catch (err: any) {
+      setPageError(parseApiError(err));
+    } finally {
+      setLoadingRooms(false);
+    }
+  };
+
+  const fetchBookings = async () => {
+    setLoadingBookings(true);
+    setPageError("");
+    try {
+      const res = await api.get<ApiListResponse<RommBookingApi>>("/room-bookings", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.data.status === 1) setBookings((res.data.data || []).map(mapApiToUi));
+      else setPageError(res.data.message || "Failed to load bookings.");
+    } catch (err: any) {
+      setPageError(parseApiError(err));
+    } finally {
+      setLoadingBookings(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRooms();
+    fetchBookings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** =========================
+   * Filter bookings
+   * ========================= */
+  const filteredBookings = bookings.filter((booking) => {
+    const matchesSearch =
       booking.eventName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       booking.room.toLowerCase().includes(searchQuery.toLowerCase()) ||
       booking.organiser.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesRoom = filterRoom === 'all' || booking.room === filterRoom;
-    const matchesEventType = filterEventType === 'all' || booking.eventType === filterEventType;
-    const matchesStatus = filterStatus === 'all' || booking.status === filterStatus;
+
+    const matchesRoom = filterRoom === "all" || booking.room === filterRoom;
+    const matchesEventType = filterEventType === "all" || booking.eventType === filterEventType;
+    const matchesStatus = filterStatus === "all" || booking.status === filterStatus;
 
     return matchesSearch && matchesRoom && matchesEventType && matchesStatus;
   });
 
-  // Statistics
-  const todayBookings = bookings.filter(b => {
+  /** =========================
+   * Statistics
+   * ========================= */
+  const todayBookings = bookings.filter((b) => {
     const today = new Date();
-    return b.date.toDateString() === today.toDateString() && b.status === 'approved';
+    return b.date.toDateString() === today.toDateString() && b.status === "approved";
   }).length;
 
-  const upcomingBookings = bookings.filter(b => {
+  const upcomingBookings = bookings.filter((b) => {
     const today = new Date();
-    return b.date > today && b.status === 'approved';
+    return b.date > today && b.status === "approved";
   }).length;
 
-  const pendingRequests = bookings.filter(b => b.status === 'pending').length;
+  const pendingRequests = bookings.filter((b) => b.status === "pending").length;
 
+  /** =========================
+   * Handlers
+   * ========================= */
   const handleNewBooking = () => {
+    setModalError("");
     setEditingBooking(null);
     setIsBookingModalOpen(true);
   };
 
   const handleEditBooking = (booking: RoomBooking) => {
+    setModalError("");
     setEditingBooking(booking);
     setIsBookingModalOpen(true);
     setIsDetailModalOpen(false);
@@ -226,23 +333,112 @@ export default function RoomBookings() {
     setIsDetailModalOpen(true);
   };
 
-  const handleApproveBooking = (bookingId: string) => {
-    setBookings(bookings.map(b => 
-      b.id === bookingId ? { ...b, status: 'approved' as const } : b
-    ));
-    setIsDetailModalOpen(false);
+  /** =========================
+   * Approve / Reject / Delete
+   * (If you don't have these endpoints, tell me your route names)
+   * ========================= */
+  const approveBooking = async (id: string) => {
+    try {
+      const res = await api.post<ApiSingleResponse<RommBookingApi>>(
+        `/room-bookings/${id}/approve`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      if (res.data.status === 1) {
+        const updated = mapApiToUi(res.data.data);
+        setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+        setIsDetailModalOpen(false);
+        setPageSuccess("Booking approved.");
+      } else {
+        setPageError(res.data.message || "Failed to approve booking.");
+      }
+    } catch (err: any) {
+      setPageError(parseApiError(err));
+    }
   };
 
-  const handleRejectBooking = (bookingId: string) => {
-    setBookings(bookings.map(b => 
-      b.id === bookingId ? { ...b, status: 'rejected' as const } : b
-    ));
-    setIsDetailModalOpen(false);
+  const rejectBooking = async (id: string) => {
+    try {
+      const res = await api.post<ApiSingleResponse<RommBookingApi>>(
+        `/room-bookings/${id}/reject`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      if (res.data.status === 1) {
+        const updated = mapApiToUi(res.data.data);
+        setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+        setIsDetailModalOpen(false);
+        setPageSuccess("Booking rejected.");
+      } else {
+        setPageError(res.data.message || "Failed to reject booking.");
+      }
+    } catch (err: any) {
+      setPageError(parseApiError(err));
+    }
   };
 
-  const handleCancelBooking = (bookingId: string) => {
-    setBookings(bookings.filter(b => b.id !== bookingId));
-    setIsDetailModalOpen(false);
+  const deleteBooking = async (id: string) => {
+    try {
+      const res = await api.delete<{ status: number; message: string }>(
+        `/room-bookings/${id}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      if (res.data.status === 1) {
+        setBookings((prev) => prev.filter((b) => b.id !== id));
+        setIsDetailModalOpen(false);
+        setPageSuccess("Booking deleted.");
+      } else {
+        setPageError(res.data.message || "Failed to delete booking.");
+      }
+    } catch (err: any) {
+      setPageError(parseApiError(err));
+    }
+  };
+
+  /** =========================
+   * Create / Update (called from modal)
+   * ========================= */
+  const saveBooking = async (payload: BookingPayload) => {
+    setModalError("");
+    setPageSuccess("");
+    setPageError("");
+
+    try {
+      const url = editingBooking ? `/room-bookings/${editingBooking.id}` : `/room-bookings`;
+      const method = editingBooking ? "put" : "post";
+
+      const res = await api.request<ApiSingleResponse<RommBookingApi>>({
+        url,
+        method,
+        data: payload,
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.data.status === 1) {
+        const saved = mapApiToUi(res.data.data);
+
+        setBookings((prev) => {
+          if (editingBooking) return prev.map((b) => (b.id === editingBooking.id ? saved : b));
+          return [saved, ...prev];
+        });
+
+        setIsBookingModalOpen(false);
+        setEditingBooking(null);
+        setPageSuccess(editingBooking ? "Booking updated." : "Booking created.");
+        return true;
+      }
+
+      // backend custom status 0
+      setModalError(res.data.message || "Failed to save booking.");
+      return false;
+    } catch (err: any) {
+      // 422 overlap error, validation error etc.
+      setModalError(parseApiError(err));
+      return false;
+    }
   };
 
   return (
@@ -256,31 +452,25 @@ export default function RoomBookings() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* View Mode Toggle */}
             <div className="flex items-center gap-1 p-1 bg-soft rounded-xl">
               <button
-                onClick={() => setViewMode('table')}
+                onClick={() => setViewMode("table")}
                 className={`px-4 py-2 rounded-lg text-sm transition-colors ${
-                  viewMode === 'table' 
-                    ? 'bg-white text-primary-blue shadow-card' 
-                    : 'text-body hover:text-dark'
+                  viewMode === "table" ? "bg-white text-primary-blue shadow-card" : "text-body hover:text-dark"
                 }`}
               >
                 Table View
               </button>
               <button
-                onClick={() => setViewMode('calendar')}
+                onClick={() => setViewMode("calendar")}
                 className={`px-4 py-2 rounded-lg text-sm transition-colors ${
-                  viewMode === 'calendar' 
-                    ? 'bg-white text-primary-blue shadow-card' 
-                    : 'text-body hover:text-dark'
+                  viewMode === "calendar" ? "bg-white text-primary-blue shadow-card" : "text-body hover:text-dark"
                 }`}
               >
                 Calendar View
               </button>
             </div>
 
-            {/* New Booking Button */}
             <button
               onClick={handleNewBooking}
               className="px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:bg-blue-600 transition-colors flex items-center gap-2 text-sm"
@@ -290,9 +480,19 @@ export default function RoomBookings() {
             </button>
           </div>
         </div>
+
+        {(pageError || pageSuccess) && (
+          <div
+            className={`mt-4 rounded-xl p-4 text-sm border ${
+              pageError ? "bg-red-50 border-red-200 text-red-700" : "bg-green-50 border-green-200 text-green-700"
+            }`}
+          >
+            {pageError || pageSuccess}
+          </div>
+        )}
       </div>
 
-      {/* Statistics Cards */}
+      {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
           <div className="flex items-center justify-between">
@@ -331,7 +531,7 @@ export default function RoomBookings() {
         </div>
       </div>
 
-      {/* Search and Filters */}
+      {/* Filters */}
       <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Search */}
@@ -348,21 +548,24 @@ export default function RoomBookings() {
             </div>
           </div>
 
-          {/* Room Filter */}
+          {/* Room */}
           <div>
             <select
               value={filterRoom}
               onChange={(e) => setFilterRoom(e.target.value)}
-              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white"
+              disabled={loadingRooms}
+              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white disabled:opacity-50"
             >
-              <option value="all">All Rooms</option>
-              {rooms.map(room => (
-                <option key={room.id} value={room.name}>{room.name}</option>
+              <option value="all">{loadingRooms ? "Loading..." : "All Rooms"}</option>
+              {rooms.map((r) => (
+                <option key={r.id} value={r.room_name}>
+                  {r.room_name} (cap: {r.capacity})
+                </option>
               ))}
             </select>
           </div>
 
-          {/* Event Type Filter */}
+          {/* Event Type */}
           <div>
             <select
               value={filterEventType}
@@ -378,7 +581,7 @@ export default function RoomBookings() {
             </select>
           </div>
 
-          {/* Status Filter */}
+          {/* Status */}
           <div>
             <select
               value={filterStatus}
@@ -392,52 +595,51 @@ export default function RoomBookings() {
             </select>
           </div>
         </div>
+
+        {loadingBookings && <div className="mt-4 text-sm text-body">Loading bookings...</div>}
       </div>
 
-      {/* Content - Table or Calendar View */}
-      {viewMode === 'table' ? (
-        <BookingsTable 
-          bookings={filteredBookings}
-          onView={handleViewBooking}
-          onEdit={handleEditBooking}
-          onCancel={handleCancelBooking}
-        />
+      {/* Content */}
+      {viewMode === "table" ? (
+        <BookingsTable bookings={filteredBookings} onView={handleViewBooking} onEdit={handleEditBooking} onCancel={deleteBooking} />
       ) : (
         <CalendarView bookings={filteredBookings} onViewBooking={handleViewBooking} />
       )}
 
-      {/* New/Edit Booking Modal */}
+      {/* Modal */}
       {isBookingModalOpen && (
         <MultipleBookingsModal
+          // ✅ make your modal accept these:
+          rooms={rooms}
           booking={editingBooking}
+          errorMessage={modalError}
           onClose={() => setIsBookingModalOpen(false)}
-          onSave={(booking) => {
-            if (editingBooking) {
-              setBookings(bookings.map(b => b.id === booking.id ? booking : b));
-            } else {
-              setBookings([...bookings, { ...booking, id: Date.now().toString() }]);
-            }
-            setIsBookingModalOpen(false);
+          onSave={async (payload: BookingPayload) => {
+            const ok = await saveBooking(payload);
+            // if ok==true modal auto closes above
+            return ok;
           }}
         />
       )}
 
-      {/* Booking Detail Modal */}
+      {/* Detail */}
       {isDetailModalOpen && selectedBooking && (
         <BookingDetailModal
           booking={selectedBooking}
           onClose={() => setIsDetailModalOpen(false)}
           onEdit={handleEditBooking}
-          onApprove={handleApproveBooking}
-          onReject={handleRejectBooking}
-          onCancel={handleCancelBooking}
+          onApprove={approveBooking}
+          onReject={rejectBooking}
+          onCancel={deleteBooking}
         />
       )}
     </div>
   );
 }
 
-// Bookings Table Component
+/** =========================
+ * Table
+ * ========================= */
 interface BookingsTableProps {
   bookings: RoomBooking[];
   onView: (booking: RoomBooking) => void;
@@ -452,35 +654,18 @@ function BookingsTable({ bookings, onView, onEdit, onCancel }: BookingsTableProp
         <table className="w-full">
           <thead className="bg-soft border-b border-light">
             <tr>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Event Name
-              </th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Event Type
-              </th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Room
-              </th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Date
-              </th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Time
-              </th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Organiser
-              </th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Status
-              </th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Notifications
-              </th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">
-                Actions
-              </th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Event Name</th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Event Type</th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Room</th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Date</th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Time</th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Organiser</th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Status</th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Notifications</th>
+              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
+
           <tbody className="divide-y divide-light">
             {bookings.length === 0 ? (
               <tr>
@@ -495,52 +680,52 @@ function BookingsTable({ bookings, onView, onEdit, onCancel }: BookingsTableProp
                     <p className="text-sm font-medium text-dark">{booking.eventName}</p>
                     <p className="text-xs text-body">{booking.department}</p>
                   </td>
+
                   <td className="px-6 py-4">
-                    <span className={`px-3 py-1 rounded-lg text-xs font-medium border ${eventTypeColors[booking.eventType].bg} ${eventTypeColors[booking.eventType].text} ${eventTypeColors[booking.eventType].border}`}>
+                    <span
+                      className={`px-3 py-1 rounded-lg text-xs font-medium border ${eventTypeColors[booking.eventType].bg} ${eventTypeColors[booking.eventType].text} ${eventTypeColors[booking.eventType].border}`}
+                    >
                       {booking.eventType.charAt(0).toUpperCase() + booking.eventType.slice(1)}
                     </span>
                   </td>
+
                   <td className="px-6 py-4 text-sm text-dark">{booking.room}</td>
+
                   <td className="px-6 py-4 text-sm text-dark">
-                    {booking.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {booking.date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                   </td>
+
                   <td className="px-6 py-4 text-sm text-dark">
                     {booking.startTime} - {booking.endTime}
                   </td>
+
                   <td className="px-6 py-4 text-sm text-dark">{booking.organiser}</td>
+
                   <td className="px-6 py-4">
-                    <span className={`px-3 py-1 rounded-lg text-xs font-medium border ${statusColors[booking.status].bg} ${statusColors[booking.status].text} ${statusColors[booking.status].border}`}>
+                    <span
+                      className={`px-3 py-1 rounded-lg text-xs font-medium border ${statusColors[booking.status].bg} ${statusColors[booking.status].text} ${statusColors[booking.status].border}`}
+                    >
                       {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
                     </span>
                   </td>
+
                   <td className="px-6 py-4">
                     <span className="text-xs text-body">
-                      {booking.notifications === 'all-staff' && 'All Staff'}
-                      {booking.notifications === 'selected-staff' && 'Selected Staff'}
-                      {booking.notifications === 'none' && 'None'}
+                      {booking.notifications === "all-staff" && "All Staff"}
+                      {booking.notifications === "selected-staff" && "Selected Staff"}
+                      {booking.notifications === "none" && "None"}
                     </span>
                   </td>
+
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => onView(booking)}
-                        className="p-2 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="View Details"
-                      >
+                      <button onClick={() => onView(booking)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors" title="View Details">
                         <Eye className="w-4 h-4 text-primary-blue" />
                       </button>
-                      <button
-                        onClick={() => onEdit(booking)}
-                        className="p-2 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Edit Booking"
-                      >
+                      <button onClick={() => onEdit(booking)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors" title="Edit Booking">
                         <Edit2 className="w-4 h-4 text-primary-blue" />
                       </button>
-                      <button
-                        onClick={() => onCancel(booking.id)}
-                        className="p-2 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Cancel Booking"
-                      >
+                      <button onClick={() => onCancel(booking.id)} className="p-2 hover:bg-red-50 rounded-lg transition-colors" title="Cancel Booking">
                         <X className="w-4 h-4 text-red-600" />
                       </button>
                     </div>
@@ -555,7 +740,9 @@ function BookingsTable({ bookings, onView, onEdit, onCancel }: BookingsTableProp
   );
 }
 
-// Calendar View Component
+/** =========================
+ * Calendar View (your same UI, simplified list)
+ * ========================= */
 interface CalendarViewProps {
   bookings: RoomBooking[];
   onViewBooking: (booking: RoomBooking) => void;
@@ -563,9 +750,7 @@ interface CalendarViewProps {
 
 function CalendarView({ bookings, onViewBooking }: CalendarViewProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [calendarView, setCalendarView] = useState<'day' | 'week' | 'month'>('week');
 
-  // Group bookings by date
   const bookingsByDate = bookings.reduce((acc, booking) => {
     const dateKey = booking.date.toDateString();
     if (!acc[dateKey]) acc[dateKey] = [];
@@ -575,66 +760,46 @@ function CalendarView({ bookings, onViewBooking }: CalendarViewProps) {
 
   return (
     <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-      {/* Calendar Controls */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
         <div className="flex items-center gap-4">
           <button
             onClick={() => {
-              const newDate = new Date(currentDate);
-              newDate.setMonth(currentDate.getMonth() - 1);
-              setCurrentDate(newDate);
+              const d = new Date(currentDate);
+              d.setMonth(d.getMonth() - 1);
+              setCurrentDate(d);
             }}
             className="p-2 hover:bg-soft rounded-lg transition-colors"
           >
             <ChevronLeft className="w-5 h-5 text-body" />
           </button>
+
           <h3 className="text-lg font-semibold text-dark">
-            {currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+            {currentDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
           </h3>
+
           <button
             onClick={() => {
-              const newDate = new Date(currentDate);
-              newDate.setMonth(currentDate.getMonth() + 1);
-              setCurrentDate(newDate);
+              const d = new Date(currentDate);
+              d.setMonth(d.getMonth() + 1);
+              setCurrentDate(d);
             }}
             className="p-2 hover:bg-soft rounded-lg transition-colors"
           >
             <ChevronRight className="w-5 h-5 text-body" />
           </button>
         </div>
-
-        {/* View Toggle */}
-        <div className="flex items-center gap-1 p-1 bg-soft rounded-xl">
-          {(['day', 'week', 'month'] as const).map((view) => (
-            <button
-              key={view}
-              onClick={() => setCalendarView(view)}
-              className={`px-4 py-2 rounded-lg text-sm transition-colors ${
-                calendarView === view
-                  ? 'bg-white text-primary-blue shadow-card'
-                  : 'text-body hover:text-dark'
-              }`}
-            >
-              {view.charAt(0).toUpperCase() + view.slice(1)}
-            </button>
-          ))}
-        </div>
       </div>
 
-      {/* Calendar Grid - Simplified Week View */}
       <div className="space-y-4">
         {Object.entries(bookingsByDate)
-          .sort(([dateA], [dateB]) => new Date(dateA).getTime() - new Date(dateB).getTime())
+          .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime())
           .slice(0, 7)
           .map(([dateKey, dayBookings]) => (
             <div key={dateKey} className="border border-light rounded-xl p-4">
               <h4 className="text-sm font-semibold text-dark mb-3">
-                {new Date(dateKey).toLocaleDateString('en-US', { 
-                  weekday: 'long', 
-                  month: 'long', 
-                  day: 'numeric' 
-                })}
+                {new Date(dateKey).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
               </h4>
+
               <div className="space-y-2">
                 {dayBookings.map((booking) => (
                   <div
@@ -660,6 +825,7 @@ function CalendarView({ bookings, onViewBooking }: CalendarViewProps) {
                           </span>
                         </div>
                       </div>
+
                       <span className={`px-2 py-1 rounded text-xs font-medium ${statusColors[booking.status].bg} ${statusColors[booking.status].text}`}>
                         {booking.status}
                       </span>
@@ -674,7 +840,10 @@ function CalendarView({ bookings, onViewBooking }: CalendarViewProps) {
   );
 }
 
-// Booking Detail Modal Component
+/** =========================
+ * Detail Modal
+ * (updated to show room info + staff names from API)
+ * ========================= */
 interface BookingDetailModalProps {
   booking: RoomBooking;
   onClose: () => void;
@@ -690,16 +859,12 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
       <div className="bg-white rounded-2xl shadow-card-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="p-6 border-b border-light flex items-center justify-between sticky top-0 bg-white">
           <h3 className="text-lg font-semibold text-dark">Booking Details</h3>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-soft rounded-lg transition-colors"
-          >
+          <button onClick={onClose} className="p-2 hover:bg-soft rounded-lg transition-colors">
             <X className="w-5 h-5 text-body" />
           </button>
         </div>
 
         <div className="p-6 space-y-6">
-          {/* Status Badge */}
           <div className="flex items-center gap-3">
             <span className={`px-4 py-2 rounded-xl text-sm font-medium border ${statusColors[booking.status].bg} ${statusColors[booking.status].text} ${statusColors[booking.status].border}`}>
               {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
@@ -709,7 +874,6 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
             </span>
           </div>
 
-          {/* Event Details */}
           <div>
             <h4 className="text-sm font-semibold text-dark mb-3">Event Details</h4>
             <div className="space-y-3">
@@ -717,12 +881,14 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
                 <label className="text-xs font-medium text-body">Event Name</label>
                 <p className="text-sm text-dark mt-1">{booking.eventName}</p>
               </div>
+
               {booking.description && (
                 <div>
                   <label className="text-xs font-medium text-body">Description</label>
                   <p className="text-sm text-dark mt-1">{booking.description}</p>
                 </div>
               )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-body">Department</label>
@@ -736,7 +902,6 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
             </div>
           </div>
 
-          {/* Room & Schedule */}
           <div>
             <h4 className="text-sm font-semibold text-dark mb-3">Room & Schedule</h4>
             <div className="grid grid-cols-2 gap-3">
@@ -744,16 +909,19 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
                 <label className="text-xs font-medium text-body">Room</label>
                 <p className="text-sm text-dark mt-1">{booking.room}</p>
               </div>
+
               <div>
                 <label className="text-xs font-medium text-body">Capacity Needed</label>
-                <p className="text-sm text-dark mt-1">{booking.capacityNeeded || 'N/A'}</p>
+                <p className="text-sm text-dark mt-1">{booking.capacityNeeded ?? "N/A"}</p>
               </div>
+
               <div>
                 <label className="text-xs font-medium text-body">Date</label>
                 <p className="text-sm text-dark mt-1">
-                  {booking.date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                  {booking.date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
                 </p>
               </div>
+
               <div>
                 <label className="text-xs font-medium text-body">Time</label>
                 <p className="text-sm text-dark mt-1">{booking.startTime} - {booking.endTime}</p>
@@ -761,8 +929,7 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
             </div>
           </div>
 
-          {/* Equipment */}
-          {booking.equipment && booking.equipment.length > 0 && (
+          {booking.equipment?.length ? (
             <div>
               <h4 className="text-sm font-semibold text-dark mb-3">Equipment Needed</h4>
               <div className="flex flex-wrap gap-2">
@@ -773,20 +940,21 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
 
-          {/* Notifications */}
           <div>
             <h4 className="text-sm font-semibold text-dark mb-3">Notifications</h4>
             <div className="space-y-2">
               <p className="text-sm text-dark">
-                Type: <span className="font-medium">
-                  {booking.notifications === 'all-staff' && 'All Staff'}
-                  {booking.notifications === 'selected-staff' && 'Selected Staff'}
-                  {booking.notifications === 'none' && 'None'}
+                Type:{" "}
+                <span className="font-medium">
+                  {booking.notifications === "all-staff" && "All Staff"}
+                  {booking.notifications === "selected-staff" && "Selected Staff"}
+                  {booking.notifications === "none" && "None"}
                 </span>
               </p>
-              {booking.selectedStaff && booking.selectedStaff.length > 0 && (
+
+              {booking.selectedStaff?.length ? (
                 <div>
                   <label className="text-xs font-medium text-body">Selected Staff</label>
                   <div className="flex flex-wrap gap-2 mt-2">
@@ -797,11 +965,10 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
                     ))}
                   </div>
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
 
-          {/* Admin Notes */}
           {booking.notes && (
             <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
               <div className="flex items-start gap-2">
@@ -815,10 +982,9 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
           )}
         </div>
 
-        {/* Actions */}
         <div className="p-6 border-t border-light flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            {booking.status === 'pending' && (
+            {booking.status === "pending" && (
               <>
                 <button
                   onClick={() => onApprove(booking.id)}
@@ -837,6 +1003,7 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
               </>
             )}
           </div>
+
           <div className="flex items-center gap-2">
             <button
               onClick={() => onEdit(booking)}

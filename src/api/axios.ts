@@ -22,21 +22,28 @@ api.interceptors.request.use(
 
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(error),
 );
 
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const status = error.response?.status;
+    const url = error.config?.url || "";
+
+    const isAuthRequest = url.includes("/login") || url.includes("/register");
+
+    if (status === 401 && !isAuthRequest) {
       localStorage.removeItem("token");
       localStorage.removeItem("user_name");
       localStorage.removeItem("roles");
+
       alert("Session expired. Please login again.");
-      window.location.href = "/login";
+      window.location.href = "/auth"; 
     }
+
     return Promise.reject(error);
-  }
+  },
 );
 
 export default api;

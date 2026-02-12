@@ -1,172 +1,328 @@
-import { useState } from 'react';
-import { 
-  Plus, 
-  Search, 
-  Edit, 
-  Eye, 
+import { useEffect, useMemo, useState } from "react";
+import {
+  Plus,
+  Search,
+  Edit,
+  Eye,
   Trash2,
   X,
   UserPlus,
   Info,
   Shield,
-  Eye as EyeIcon
-} from 'lucide-react';
-import { mockUsers, User } from '../../data/mockData';
-import { toast } from 'sonner@2.0.3';
+  Eye as EyeIcon,
+} from "lucide-react";
+import api from "../../api/axios";
+import { toast } from "sonner";
+
+type ApiUser = {
+  id: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  status: "active" | "inactive" | null;
+  created_at?: string;
+  roles: string[]; // ["Observer"] etc
+};
+
+type ApiListResponse = {
+  status: number;
+  message: string;
+  data: ApiUser[];
+};
+
+type ApiOneResponse = {
+  status: number;
+  message: string;
+  data: ApiUser;
+};
+
+// ---------- Types (UI) ----------
+type UiUser = {
+  id: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  role: "Admin" | "Observer";
+  status: "Active" | "Inactive";
+  createdOn: string; // yyyy-mm-dd
+};
+
+// ---------- Helpers ----------
+const token = () => localStorage.getItem("token");
+
+const mapRoleFromApi = (roles: string[]): "Admin" | "Observer" => {
+  // priority: Admin > Observer
+  const lower = (roles || []).map((r) => String(r).toLowerCase());
+  if (lower.includes("admin")) return "Admin";
+  return "Observer";
+};
+
+const mapStatusFromApi = (status: string | null): "Active" | "Inactive" => {
+  if (!status) return "Active"; // safe default
+  return status.toLowerCase() === "inactive" ? "Inactive" : "Active";
+};
+
+const mapUserFromApi = (u: ApiUser): UiUser => ({
+  id: String(u.id),
+  fullName: u.name,
+  email: u.email,
+  phone: u.phone ?? "",
+  role: mapRoleFromApi(u.roles),
+  status: mapStatusFromApi(u.status ?? "active"),
+  createdOn: u.created_at ? u.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
+});
 
 export default function UsersManagement() {
-  const [users, setUsers] = useState<User[]>(mockUsers);
+  const [users, setUsers] = useState<UiUser[]>([]);
+  const [loading, setLoading] = useState(false);
+
   const [showAddDrawer, setShowAddDrawer] = useState(false);
   const [showEditDrawer, setShowEditDrawer] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+
+  const [selectedUser, setSelectedUser] = useState<UiUser | null>(null);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
-  
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterRole, setFilterRole] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
 
-  // Form state
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterRole, setFilterRole] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+
+  // Form state (same UI fields)
   const [formData, setFormData] = useState({
-    fullName: '',
-    email: '',
-    phone: '',
-    password: '',
-    confirmPassword: '',
-    role: 'Observer' as 'Admin' | 'Observer',
-    status: 'Active' as 'Active' | 'Inactive'
+    fullName: "",
+    email: "",
+    phone: "",
+    password: "",
+    confirmPassword: "",
+    role: "Observer" as "Admin" | "Observer",
+    status: "Active" as "Active" | "Inactive",
   });
 
-  // Filter users
-  const filteredUsers = users.filter(user => {
-    const matchesSearch = user.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesRole = !filterRole || user.role === filterRole;
-    const matchesStatus = !filterStatus || user.status === filterStatus;
-    
-    return matchesSearch && matchesRole && matchesStatus;
-  });
-
-  // Get initials from name
-  const getInitials = (name: string) => {
-    return name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  };
-
-  // Reset form
   const resetForm = () => {
     setFormData({
-      fullName: '',
-      email: '',
-      phone: '',
-      password: '',
-      confirmPassword: '',
-      role: 'Observer',
-      status: 'Active'
+      fullName: "",
+      email: "",
+      phone: "",
+      password: "",
+      confirmPassword: "",
+      role: "Observer",
+      status: "Active",
     });
   };
 
-  // Handle Add User
-  const handleAddUser = () => {
-    if (!formData.fullName || !formData.email || !formData.phone || !formData.password) {
-      toast.error('Please fill in all required fields');
-      return;
-    }
+  // Fetch users
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        setLoading(true);
 
-    if (formData.password !== formData.confirmPassword) {
-      toast.error('Passwords do not match');
-      return;
-    }
+        const res = await api.get<ApiListResponse>("/users", {
+          headers: { Authorization: `Bearer ${token()}` },
+          params: {
+            search: searchTerm || undefined,
+            role: filterRole || undefined, // if backend supports it
+            status:
+              filterStatus === "Active"
+                ? "active"
+                : filterStatus === "Inactive"
+                ? "inactive"
+                : undefined,
+          },
+        });
 
-    const newUser: User = {
-      id: `u${users.length + 1}`,
-      fullName: formData.fullName,
-      email: formData.email,
-      phone: formData.phone,
-      role: formData.role,
-      status: formData.status,
-      createdOn: new Date().toISOString().split('T')[0]
+        if (res.data.status === 1) {
+          setUsers(res.data.data.map(mapUserFromApi));
+        } else {
+          toast.error(res.data.message || "Failed to fetch users");
+        }
+      } catch (e: any) {
+        console.error(e);
+        toast.error(e.response?.data?.message || "Error fetching users");
+      } finally {
+        setLoading(false);
+      }
     };
 
-    setUsers([...users, newUser]);
-    toast.success(`User ${formData.fullName} has been added successfully`);
-    setShowAddDrawer(false);
-    resetForm();
+    fetchUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm, filterRole, filterStatus]);
+
+  // Filter users locally too (keeps UI responsive even if backend doesn't filter)
+  const filteredUsers = useMemo(() => {
+    return users.filter((user) => {
+      const matchesSearch =
+        user.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        user.email.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesRole = !filterRole || user.role === filterRole;
+      const matchesStatus = !filterStatus || user.status === filterStatus;
+      return matchesSearch && matchesRole && matchesStatus;
+    });
+  }, [users, searchTerm, filterRole, filterStatus]);
+
+  // Get initials
+  const getInitials = (name: string) =>
+    name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+
+  // Stats
+  const totalUsers = users.length;
+  const activeUsers = users.filter((u) => u.status === "Active").length;
+  const adminCount = users.filter((u) => u.role === "Admin").length;
+  const observerCount = users.filter((u) => u.role === "Observer").length;
+
+  // Add User (API)
+  const handleAddUser = async () => {
+    if (!formData.fullName || !formData.email || !formData.phone || !formData.password) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+    if (formData.password !== formData.confirmPassword) {
+      toast.error("Passwords do not match");
+      return;
+    }
+
+    const payload = {
+      name: formData.fullName,
+      email: formData.email,
+      phone: formData.phone,
+      password: formData.password,
+      password_confirmation: formData.confirmPassword,
+      role: formData.role, // "Admin" | "Observer"
+      status: formData.status === "Active" ? "active" : "inactive", // ✅ backend default active anyway
+    };
+
+    try {
+      const res = await api.post<ApiOneResponse>("/users", payload, {
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+
+      if (res.data.status === 1) {
+        const created = mapUserFromApi(res.data.data);
+        setUsers((prev) => [created, ...prev]);
+        toast.success(`User ${created.fullName} has been added successfully`);
+        setShowAddDrawer(false);
+        resetForm();
+      } else {
+        toast.error(res.data.message || "Failed to add user");
+      }
+    } catch (error: any) {
+      if (error.response?.status === 422) {
+        const errors = error.response.data?.errors;
+        const firstError = errors ? (Object.values(errors)[0] as string[]) : null;
+        toast.error(firstError?.[0] || "Validation error");
+        return;
+      }
+      toast.error(error.response?.data?.message || "Failed to add user");
+    }
   };
 
-  // Handle Edit User
-  const handleEditClick = (user: User) => {
+  // Edit click
+  const handleEditClick = (user: UiUser) => {
     setSelectedUser(user);
     setFormData({
       fullName: user.fullName,
       email: user.email,
       phone: user.phone,
-      password: '',
-      confirmPassword: '',
+      password: "",
+      confirmPassword: "",
       role: user.role,
-      status: user.status
+      status: user.status,
     });
     setShowEditDrawer(true);
   };
 
-  const handleUpdateUser = () => {
+  // Update user (API)
+  const handleUpdateUser = async () => {
     if (!selectedUser) return;
 
     if (!formData.fullName || !formData.email || !formData.phone) {
-      toast.error('Please fill in all required fields');
+      toast.error("Please fill in all required fields");
       return;
     }
-
     if (formData.password && formData.password !== formData.confirmPassword) {
-      toast.error('Passwords do not match');
+      toast.error("Passwords do not match");
       return;
     }
 
-    const updatedUsers = users.map(user =>
-      user.id === selectedUser.id
-        ? { ...user, fullName: formData.fullName, email: formData.email, phone: formData.phone, role: formData.role, status: formData.status }
-        : user
-    );
+    const payload: any = {
+      name: formData.fullName,
+      email: formData.email,
+      phone: formData.phone,
+      role: formData.role,
+      status: formData.status === "Active" ? "active" : "inactive",
+    };
 
-    setUsers(updatedUsers);
-    toast.success(`User ${formData.fullName} has been updated successfully`);
-    setShowEditDrawer(false);
-    setSelectedUser(null);
-    resetForm();
+    // only send password when user typed it
+    if (formData.password) {
+      payload.password = formData.password;
+      payload.password_confirmation = formData.confirmPassword;
+    }
+
+    try {
+      const res = await api.put<ApiOneResponse>(`/users/${selectedUser.id}`, payload, {
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+
+      if (res.data.status === 1) {
+        const updated = mapUserFromApi(res.data.data);
+        setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+        toast.success(`User ${updated.fullName} has been updated successfully`);
+        setShowEditDrawer(false);
+        setSelectedUser(null);
+        resetForm();
+      } else {
+        toast.error(res.data.message || "Failed to update user");
+      }
+    } catch (error: any) {
+      if (error.response?.status === 422) {
+        const errors = error.response.data?.errors;
+        const firstError = errors ? (Object.values(errors)[0] as string[]) : null;
+        toast.error(firstError?.[0] || "Validation error");
+        return;
+      }
+      toast.error(error.response?.data?.message || "Failed to update user");
+    }
   };
 
-  // Handle View User
-  const handleViewUser = (user: User) => {
+  // View
+  const handleViewUser = (user: UiUser) => {
     setSelectedUser(user);
     setShowViewModal(true);
   };
 
-  // Handle Delete User
+  // Delete
   const handleDeleteClick = (id: string) => {
     setDeleteTargetId(id);
     setShowDeleteConfirm(true);
   };
 
-  const confirmDelete = () => {
-    if (deleteTargetId) {
-      const userToDelete = users.find(u => u.id === deleteTargetId);
-      setUsers(users.filter(user => user.id !== deleteTargetId));
-      toast.success(`User ${userToDelete?.fullName} has been deleted successfully`);
+  const confirmDelete = async () => {
+    if (!deleteTargetId) return;
+
+    try {
+      const res = await api.delete<{ status: number; message: string }>(`/users/${deleteTargetId}`, {
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+
+      if (res.data.status === 1) {
+        const userToDelete = users.find((u) => u.id === deleteTargetId);
+        setUsers((prev) => prev.filter((u) => u.id !== deleteTargetId));
+        toast.success(`User ${userToDelete?.fullName ?? ""} has been deleted successfully`);
+      } else {
+        toast.error(res.data.message || "Failed to delete user");
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || "Failed to delete user");
+    } finally {
       setShowDeleteConfirm(false);
       setDeleteTargetId(null);
     }
   };
-
-  // Calculate stats
-  const totalUsers = users.length;
-  const activeUsers = users.filter(u => u.status === 'Active').length;
-  const adminCount = users.filter(u => u.role === 'Admin').length;
-  const observerCount = users.filter(u => u.role === 'Observer').length;
 
   return (
     <div className="space-y-6">
@@ -249,9 +405,9 @@ export default function UsersManagement() {
           {(searchTerm || filterRole || filterStatus) && (
             <button
               onClick={() => {
-                setSearchTerm('');
-                setFilterRole('');
-                setFilterStatus('');
+                setSearchTerm("");
+                setFilterRole("");
+                setFilterStatus("");
               }}
               className="px-4 py-3 border border-light rounded-xl hover:bg-soft transition-colors text-body"
             >
@@ -267,8 +423,14 @@ export default function UsersManagement() {
             <div className="text-sm">
               <div className="text-dark mb-2">Role Definitions:</div>
               <div className="space-y-1 text-body">
-                <div><span className="text-primary-blue">• Admin:</span> Full system access - Can manage schedules, teachers, rooms, users, and settings</div>
-                <div><span className="text-body">• Observer:</span> Read-only access - Can view schedules, timetables, and reports (cannot create, edit, or delete)</div>
+                <div>
+                  <span className="text-primary-blue">• Admin:</span> Full system access - Can manage schedules, teachers,
+                  rooms, users, and settings
+                </div>
+                <div>
+                  <span className="text-body">• Observer:</span> Read-only access - Can view schedules, timetables, and
+                  reports (cannot create, edit, or delete)
+                </div>
               </div>
             </div>
           </div>
@@ -289,79 +451,93 @@ export default function UsersManagement() {
                 <th className="text-left px-6 py-4 text-sm text-dark">Actions</th>
               </tr>
             </thead>
+
             <tbody>
-              {filteredUsers.map((user) => (
-                <tr key={user.id} className="border-b border-light hover:bg-soft transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-primary-blue text-white flex items-center justify-center flex-shrink-0">
-                        {getInitials(user.fullName)}
-                      </div>
-                      <div>
-                        <div className="text-dark">{user.fullName}</div>
-                        <div className="text-sm text-body">{user.email}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-body">{user.phone}</td>
-                  <td className="px-6 py-4">
-                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm ${
-                      user.role === 'Admin'
-                        ? 'bg-blue-50 text-primary-blue'
-                        : 'bg-gray-100 text-body'
-                    }`}>
-                      {user.role === 'Admin' && <Shield className="w-3.5 h-3.5" />}
-                      {user.role === 'Observer' && <EyeIcon className="w-3.5 h-3.5" />}
-                      {user.role}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`inline-flex px-3 py-1 rounded-full text-sm ${
-                      user.status === 'Active'
-                        ? 'bg-green-50 text-success'
-                        : 'bg-gray-100 text-body'
-                    }`}>
-                      {user.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-body">
-                    {new Date(user.createdOn).toLocaleDateString('en-US', { 
-                      year: 'numeric', 
-                      month: 'short', 
-                      day: 'numeric' 
-                    })}
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleViewUser(user)}
-                        className="p-2 hover:bg-soft rounded-lg transition-colors text-body hover:text-primary-blue"
-                        title="View"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleEditClick(user)}
-                        className="p-2 hover:bg-soft rounded-lg transition-colors text-body hover:text-primary-blue"
-                        title="Edit"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteClick(user.id)}
-                        className="p-2 hover:bg-red-50 rounded-lg transition-colors text-body hover:text-red-600"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="text-center py-12 text-body">
+                    Loading users...
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredUsers.map((user) => (
+                  <tr key={user.id} className="border-b border-light hover:bg-soft transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-primary-blue text-white flex items-center justify-center flex-shrink-0">
+                          {getInitials(user.fullName)}
+                        </div>
+                        <div>
+                          <div className="text-dark">{user.fullName}</div>
+                          <div className="text-sm text-body">{user.email}</div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="px-6 py-4 text-body">{user.phone}</td>
+
+                    <td className="px-6 py-4">
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm ${
+                          user.role === "Admin" ? "bg-blue-50 text-primary-blue" : "bg-gray-100 text-body"
+                        }`}
+                      >
+                        {user.role === "Admin" && <Shield className="w-3.5 h-3.5" />}
+                        {user.role === "Observer" && <EyeIcon className="w-3.5 h-3.5" />}
+                        {user.role}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <span
+                        className={`inline-flex px-3 py-1 rounded-full text-sm ${
+                          user.status === "Active" ? "bg-green-50 text-success" : "bg-gray-100 text-body"
+                        }`}
+                      >
+                        {user.status}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4 text-body">
+                      {new Date(user.createdOn).toLocaleDateString("en-US", {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleViewUser(user)}
+                          className="p-2 hover:bg-soft rounded-lg transition-colors text-body hover:text-primary-blue"
+                          title="View"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleEditClick(user)}
+                          className="p-2 hover:bg-soft rounded-lg transition-colors text-body hover:text-primary-blue"
+                          title="Edit"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClick(user.id)}
+                          className="p-2 hover:bg-red-50 rounded-lg transition-colors text-body hover:text-red-600"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
 
-          {filteredUsers.length === 0 && (
+          {!loading && filteredUsers.length === 0 && (
             <div className="text-center py-12">
               <UserPlus className="w-12 h-12 text-body mx-auto mb-3 opacity-50" />
               <p className="text-body">No users found</p>
@@ -373,17 +549,12 @@ export default function UsersManagement() {
       {/* Add User Drawer */}
       {showAddDrawer && (
         <>
-          <div 
-            className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50"
-            onClick={() => setShowAddDrawer(false)}
-          />
+          <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50" onClick={() => setShowAddDrawer(false)} />
+
           <div className="fixed right-0 top-0 h-full w-full sm:w-[500px] bg-white shadow-card-xl z-50 overflow-y-auto">
             <div className="p-6 border-b border-light flex items-center justify-between sticky top-0 bg-white">
               <h2 className="text-dark">Add New User</h2>
-              <button
-                onClick={() => setShowAddDrawer(false)}
-                className="p-2 hover:bg-soft rounded-lg transition-colors"
-              >
+              <button onClick={() => setShowAddDrawer(false)} className="p-2 hover:bg-soft rounded-lg transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -460,7 +631,7 @@ export default function UsersManagement() {
                 </label>
                 <select
                   value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value as 'Admin' | 'Observer' })}
+                  onChange={(e) => setFormData({ ...formData, role: e.target.value as "Admin" | "Observer" })}
                   className="w-full px-4 py-3 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
                 >
                   <option value="Admin">Admin</option>
@@ -472,21 +643,23 @@ export default function UsersManagement() {
                 <label className="block text-dark mb-2">Status</label>
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => setFormData({ ...formData, status: 'Active' })}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, status: "Active" })}
                     className={`flex-1 px-4 py-3 rounded-xl border transition-colors ${
-                      formData.status === 'Active'
-                        ? 'bg-green-50 border-success text-success'
-                        : 'border-light text-body hover:bg-soft'
+                      formData.status === "Active"
+                        ? "bg-green-50 border-success text-success"
+                        : "border-light text-body hover:bg-soft"
                     }`}
                   >
                     Active
                   </button>
                   <button
-                    onClick={() => setFormData({ ...formData, status: 'Inactive' })}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, status: "Inactive" })}
                     className={`flex-1 px-4 py-3 rounded-xl border transition-colors ${
-                      formData.status === 'Inactive'
-                        ? 'bg-gray-100 border-gray-400 text-body'
-                        : 'border-light text-body hover:bg-soft'
+                      formData.status === "Inactive"
+                        ? "bg-gray-100 border-gray-400 text-body"
+                        : "border-light text-body hover:bg-soft"
                     }`}
                   >
                     Inactive
@@ -516,17 +689,12 @@ export default function UsersManagement() {
       {/* Edit User Drawer */}
       {showEditDrawer && selectedUser && (
         <>
-          <div 
-            className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50"
-            onClick={() => setShowEditDrawer(false)}
-          />
+          <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50" onClick={() => setShowEditDrawer(false)} />
+
           <div className="fixed right-0 top-0 h-full w-full sm:w-[500px] bg-white shadow-card-xl z-50 overflow-y-auto">
             <div className="p-6 border-b border-light flex items-center justify-between sticky top-0 bg-white">
               <h2 className="text-dark">Edit User</h2>
-              <button
-                onClick={() => setShowEditDrawer(false)}
-                className="p-2 hover:bg-soft rounded-lg transition-colors"
-              >
+              <button onClick={() => setShowEditDrawer(false)} className="p-2 hover:bg-soft rounded-lg transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -569,9 +737,7 @@ export default function UsersManagement() {
               </div>
 
               <div>
-                <label className="block text-dark mb-2">
-                  Reset Password (optional)
-                </label>
+                <label className="block text-dark mb-2">Reset Password (optional)</label>
                 <input
                   type="password"
                   value={formData.password}
@@ -583,9 +749,7 @@ export default function UsersManagement() {
 
               {formData.password && (
                 <div>
-                  <label className="block text-dark mb-2">
-                    Confirm New Password
-                  </label>
+                  <label className="block text-dark mb-2">Confirm New Password</label>
                   <input
                     type="password"
                     value={formData.confirmPassword}
@@ -602,7 +766,7 @@ export default function UsersManagement() {
                 </label>
                 <select
                   value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value as 'Admin' | 'Observer' })}
+                  onChange={(e) => setFormData({ ...formData, role: e.target.value as "Admin" | "Observer" })}
                   className="w-full px-4 py-3 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
                 >
                   <option value="Admin">Admin</option>
@@ -614,21 +778,23 @@ export default function UsersManagement() {
                 <label className="block text-dark mb-2">Status</label>
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => setFormData({ ...formData, status: 'Active' })}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, status: "Active" })}
                     className={`flex-1 px-4 py-3 rounded-xl border transition-colors ${
-                      formData.status === 'Active'
-                        ? 'bg-green-50 border-success text-success'
-                        : 'border-light text-body hover:bg-soft'
+                      formData.status === "Active"
+                        ? "bg-green-50 border-success text-success"
+                        : "border-light text-body hover:bg-soft"
                     }`}
                   >
                     Active
                   </button>
                   <button
-                    onClick={() => setFormData({ ...formData, status: 'Inactive' })}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, status: "Inactive" })}
                     className={`flex-1 px-4 py-3 rounded-xl border transition-colors ${
-                      formData.status === 'Inactive'
-                        ? 'bg-gray-100 border-gray-400 text-body'
-                        : 'border-light text-body hover:bg-soft'
+                      formData.status === "Inactive"
+                        ? "bg-gray-100 border-gray-400 text-body"
+                        : "border-light text-body hover:bg-soft"
                     }`}
                   >
                     Inactive
@@ -658,20 +824,14 @@ export default function UsersManagement() {
       {/* View User Modal */}
       {showViewModal && selectedUser && (
         <>
-          <div 
+          <div
             className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4"
             onClick={() => setShowViewModal(false)}
           >
-            <div 
-              className="bg-white rounded-xl shadow-card-xl max-w-md w-full"
-              onClick={(e) => e.stopPropagation()}
-            >
+            <div className="bg-white rounded-xl shadow-card-xl max-w-md w-full" onClick={(e) => e.stopPropagation()}>
               <div className="p-6 border-b border-light flex items-center justify-between">
                 <h2 className="text-dark">User Details</h2>
-                <button
-                  onClick={() => setShowViewModal(false)}
-                  className="p-2 hover:bg-soft rounded-lg transition-colors"
-                >
+                <button onClick={() => setShowViewModal(false)} className="p-2 hover:bg-soft rounded-lg transition-colors">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -683,13 +843,13 @@ export default function UsersManagement() {
                   </div>
                   <div>
                     <div className="text-dark text-xl">{selectedUser.fullName}</div>
-                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm mt-1 ${
-                      selectedUser.role === 'Admin'
-                        ? 'bg-blue-50 text-primary-blue'
-                        : 'bg-gray-100 text-body'
-                    }`}>
-                      {selectedUser.role === 'Admin' && <Shield className="w-3.5 h-3.5" />}
-                      {selectedUser.role === 'Observer' && <EyeIcon className="w-3.5 h-3.5" />}
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm mt-1 ${
+                        selectedUser.role === "Admin" ? "bg-blue-50 text-primary-blue" : "bg-gray-100 text-body"
+                      }`}
+                    >
+                      {selectedUser.role === "Admin" && <Shield className="w-3.5 h-3.5" />}
+                      {selectedUser.role === "Observer" && <EyeIcon className="w-3.5 h-3.5" />}
                       {selectedUser.role}
                     </span>
                   </div>
@@ -708,11 +868,11 @@ export default function UsersManagement() {
 
                   <div>
                     <div className="text-sm text-body mb-1">Status</div>
-                    <span className={`inline-flex px-3 py-1 rounded-full text-sm ${
-                      selectedUser.status === 'Active'
-                        ? 'bg-green-50 text-success'
-                        : 'bg-gray-100 text-body'
-                    }`}>
+                    <span
+                      className={`inline-flex px-3 py-1 rounded-full text-sm ${
+                        selectedUser.status === "Active" ? "bg-green-50 text-success" : "bg-gray-100 text-body"
+                      }`}
+                    >
                       {selectedUser.status}
                     </span>
                   </div>
@@ -720,10 +880,10 @@ export default function UsersManagement() {
                   <div>
                     <div className="text-sm text-body mb-1">Created On</div>
                     <div className="text-dark">
-                      {new Date(selectedUser.createdOn).toLocaleDateString('en-US', { 
-                        year: 'numeric', 
-                        month: 'long', 
-                        day: 'numeric' 
+                      {new Date(selectedUser.createdOn).toLocaleDateString("en-US", {
+                        year: "numeric",
+                        month: "long",
+                        day: "numeric",
                       })}
                     </div>
                   </div>
@@ -750,14 +910,11 @@ export default function UsersManagement() {
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <>
-          <div 
+          <div
             className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4"
             onClick={() => setShowDeleteConfirm(false)}
           >
-            <div 
-              className="bg-white rounded-xl shadow-card-xl max-w-md w-full"
-              onClick={(e) => e.stopPropagation()}
-            >
+            <div className="bg-white rounded-xl shadow-card-xl max-w-md w-full" onClick={(e) => e.stopPropagation()}>
               <div className="p-6">
                 <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
                   <Trash2 className="w-6 h-6 text-red-600" />
@@ -773,10 +930,7 @@ export default function UsersManagement() {
                   >
                     Cancel
                   </button>
-                  <button
-                    onClick={confirmDelete}
-                    className="flex-1 px-6 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors"
-                  >
+                  <button onClick={confirmDelete} className="flex-1 px-6 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors">
                     Delete
                   </button>
                 </div>
