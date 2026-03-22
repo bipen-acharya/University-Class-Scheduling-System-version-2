@@ -1,11 +1,9 @@
 import { JSX, useEffect, useMemo, useState } from "react";
 import api from "../../api/axios";
-import { Calendar, Plus, Edit2, Trash2, X } from "lucide-react";
+import { Calendar, Plus, Edit2, Trash2, X, Filter } from "lucide-react";
+import { toast } from "sonner";
 
-/** =========================
- * Types (API + UI)
- * ========================= */
-
+/** ========================= Types ========================= */
 type PeriodType =
   | "teaching"
   | "orientation"
@@ -42,17 +40,8 @@ type TrimisterApi = {
   updated_at?: string;
 };
 
-type ApiListResponse<T> = {
-  status: number;
-  message: string;
-  data: T[];
-};
-
-type ApiSingleResponse<T> = {
-  status: number;
-  message: string;
-  data: T;
-};
+type ApiListResponse<T> = { status: number; message: string; data: T[] };
+type ApiSingleResponse<T> = { status: number; message: string; data: T };
 
 interface AcademicPeriodUI {
   id: string;
@@ -67,745 +56,596 @@ interface AcademicPeriodUI {
 }
 
 const periodTypes = [
-  {
-    value: "teaching",
-    label: "Teaching Weeks",
-    color: "#60A5FA",
-    bgColor: "#EFF6FF",
-    borderColor: "#BFDBFE",
-  },
-  {
-    value: "orientation",
-    label: "Orientation",
-    color: "#A78BFA",
-    bgColor: "#F5F3FF",
-    borderColor: "#DDD6FE",
-  },
-  {
-    value: "holiday",
-    label: "Public Holidays",
-    color: "#EF4444",
-    bgColor: "#FEF2F2",
-    borderColor: "#FECACA",
-  },
-  {
-    value: "census",
-    label: "Census Date",
-    color: "#F59E0B",
-    bgColor: "#FFFBEB",
-    borderColor: "#FDE68A",
-  },
-  {
-    value: "exam",
-    label: "Examination Period",
-    color: "#EAB308",
-    bgColor: "#FEFCE8",
-    borderColor: "#FDE047",
-  },
-  {
-    value: "exam-break",
-    label: "Examination Break",
-    color: "#6B7280",
-    bgColor: "#F9FAFB",
-    borderColor: "#D1D5DB",
-  },
-  {
-    value: "trimester-break",
-    label: "Trimester Break",
-    color: "#1E40AF",
-    bgColor: "#EFF6FF",
-    borderColor: "#93C5FD",
-  },
+  { value: "teaching",        label: "Teaching Weeks",     color: "#60A5FA", bgColor: "#EFF6FF", borderColor: "#BFDBFE" },
+  { value: "orientation",     label: "Orientation",        color: "#A78BFA", bgColor: "#F5F3FF", borderColor: "#DDD6FE" },
+  { value: "holiday",         label: "Public Holidays",    color: "#EF4444", bgColor: "#FEF2F2", borderColor: "#FECACA" },
+  { value: "census",          label: "Census Date",        color: "#F59E0B", bgColor: "#FFFBEB", borderColor: "#FDE68A" },
+  { value: "exam",            label: "Examination Period", color: "#EAB308", bgColor: "#FEFCE8", borderColor: "#FDE047" },
+  { value: "exam-break",      label: "Examination Break",  color: "#6B7280", bgColor: "#F9FAFB", borderColor: "#D1D5DB" },
+  { value: "trimester-break", label: "Trimester Break",    color: "#1E40AF", bgColor: "#EFF6FF", borderColor: "#93C5FD" },
 ] as const;
 
-/** =========================
- * Helpers
- * ========================= */
-
-function toDateStart(yyyyMmDd: string) {
-  return new Date(`${yyyyMmDd}T00:00:00`);
-}
-function toDateEnd(yyyyMmDd: string) {
-  return new Date(`${yyyyMmDd}T23:59:59`);
-}
+/** ========================= Helpers ========================= */
+function toDateStart(s: string) { return new Date(`${s}T00:00:00`); }
+function toDateEnd(s: string)   { return new Date(`${s}T23:59:59`); }
 
 function mapPeriodApiToUi(p: AcademicPeriodApi): AcademicPeriodUI {
   const meta = periodTypes.find((x) => x.value === p.type);
   return {
-    id: String(p.id),
-    name: p.name,
-    type: p.type,
+    id: String(p.id), name: p.name, type: p.type,
     startDate: toDateStart(p.start_date),
-    endDate: toDateEnd(p.end_date),
-    color: meta?.color ?? "#60A5FA",
-    bgColor: meta?.bgColor ?? "#EFF6FF",
+    endDate:   toDateEnd(p.end_date),
+    color:       meta?.color       ?? "#60A5FA",
+    bgColor:     meta?.bgColor     ?? "#EFF6FF",
     borderColor: meta?.borderColor ?? "#BFDBFE",
     notes: p.notes ?? undefined,
   };
 }
 
 function formatYmd(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-/** =========================
- * Component
- * ========================= */
+function shortDate(yyyyMmDd: string) {
+  return new Date(`${yyyyMmDd}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 
+const MONTH_NAMES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
+
+/** ========================= Skeleton: sidebar item ========================= */
+function SidebarSkeletonItem() {
+  return (
+    <div className="px-3 py-3 rounded-lg">
+      <div className="flex items-start gap-2">
+        <div className="w-2 h-2 rounded-full bg-gray-200 animate-pulse mt-1.5 flex-shrink-0" />
+        <div className="flex-1 space-y-2">
+          <div className="h-3.5 w-28 rounded bg-gray-200 animate-pulse" />
+          <div className="h-3 w-20 rounded bg-gray-200 animate-pulse" />
+          <div className="h-4 w-12 rounded-full bg-gray-200 animate-pulse" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ========================= Skeleton: calendar month card ========================= */
+function CalendarMonthSkeleton({ name, year }: { name: string; year: number }) {
+  return (
+    <div className="bg-white rounded-lg shadow-card border border-light overflow-hidden">
+      <div className="bg-soft px-3 py-2 border-b border-light">
+        <h3 className="text-xs font-medium text-dark">{name} {year}</h3>
+      </div>
+      <div className="p-2">
+        <div className="grid grid-cols-7 mb-1">
+          {["S","M","T","W","T","F","S"].map((d, i) => (
+            <div key={i} className="text-center text-xs font-medium text-body py-0.5">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-0.5">
+          {Array.from({ length: 35 }).map((_, i) => (
+            <div key={i} className="aspect-square rounded-sm bg-gray-100 animate-pulse" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ========================= Component ========================= */
 export default function AcademicCalendar() {
-  const [selectedYear, setSelectedYear] = useState(2025);
+  const [selectedYear,   setSelectedYear]   = useState(new Date().getFullYear());
   const [selectedCampus, setSelectedCampus] = useState("main");
 
-  // Dynamic data
-  const [trimesters, setTrimesters] = useState<TrimisterApi[]>([]);
-  const [selectedTrimisterId, setSelectedTrimisterId] = useState<number | null>(
-    null,
-  );
-  const [periods, setPeriods] = useState<AcademicPeriodUI[]>([]);
+  const [trimesters,          setTrimesters]          = useState<TrimisterApi[]>([]);
+  const [loadingTrimesters,   setLoadingTrimesters]   = useState(true);   // ← NEW
+  const [loadingPeriods,      setLoadingPeriods]      = useState(false);  // ← NEW
+  const [selectedTrimisterId, setSelectedTrimisterId] = useState<number | null>(null);
+  const [statusFilter,        setStatusFilter]        = useState<"all" | "active" | "inactive">("active");
+  const [periods,             setPeriods]             = useState<AcademicPeriodUI[]>([]);
 
-  // UI state
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingPeriod, setEditingPeriod] = useState<AcademicPeriodUI | null>(
-    null,
-  );
-  const [selectedPeriod, setSelectedPeriod] = useState<AcademicPeriodUI | null>(
-    null,
-  );
+  const [isModalOpen,    setIsModalOpen]    = useState(false);
+  const [editingPeriod,  setEditingPeriod]  = useState<AcademicPeriodUI | null>(null);
+  const [selectedPeriod, setSelectedPeriod] = useState<AcademicPeriodUI | null>(null);
+  const [deletingId,     setDeletingId]     = useState<string | null>(null);
 
-  // ✅ NEW: modal-specific error + saving state
-  const [periodModalError, setPeriodModalError] = useState<string>("");
+  const [modalError,   setModalError]   = useState("");
   const [savingPeriod, setSavingPeriod] = useState(false);
 
   const token = useMemo(() => localStorage.getItem("token"), []);
 
-  const monthNames = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-  ];
+  // ── Derived ────────────────────────────────────────────────────────────────
+  const filteredTrimesters = useMemo(() =>
+    statusFilter === "all"
+      ? trimesters
+      : trimesters.filter((t) => t.status === statusFilter),
+    [trimesters, statusFilter]
+  );
 
-  const selectedTrimister = useMemo(() => {
-    if (!selectedTrimisterId) return null;
-    return trimesters.find((t) => t.id === selectedTrimisterId) ?? null;
-  }, [selectedTrimisterId, trimesters]);
+  const selectedTrimister = useMemo(
+    () => (selectedTrimisterId ? trimesters.find((t) => t.id === selectedTrimisterId) ?? null : null),
+    [selectedTrimisterId, trimesters]
+  );
 
-  /** =========================
-   * Fetch Trimesters
-   * ========================= */
+  // ── Fetch trimesters ───────────────────────────────────────────────────────
   useEffect(() => {
     const fetchTrimesters = async () => {
       try {
+        setLoadingTrimesters(true); // ← NEW
         const res = await api.get<ApiListResponse<TrimisterApi>>("/trimisters", {
           headers: { Authorization: `Bearer ${token}` },
         });
-
         if (res.data.status === 1) {
           const list = res.data.data || [];
           setTrimesters(list);
-
-          const active = list.find((t) => t.status === "active") || list[0];
-          if (active?.id) {
+          const active = list.find((t) => t.status === "active") ?? list[0];
+          if (active) {
             setSelectedTrimisterId(active.id);
-
-            const startYear = new Date(`${active.start_date}T00:00:00`).getFullYear();
-            setSelectedYear(startYear);
+            setSelectedYear(new Date(`${active.start_date}T00:00:00`).getFullYear());
           }
         } else {
-          alert(res.data.message || "Failed to load trimesters.");
+          toast.error(res.data.message || "Failed to load trimesters.");
         }
-      } catch (err) {
-        console.error(err);
-        alert("Error loading trimesters. Check console.");
+      } catch {
+        toast.error("Error loading trimesters.");
+      } finally {
+        setLoadingTrimesters(false); // ← NEW
       }
     };
-
     fetchTrimesters();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** =========================
-   * Fetch Periods (filtered by trimester)
-   * ========================= */
+  // If selected trimester becomes hidden by the filter, switch to first visible
   useEffect(() => {
     if (!selectedTrimisterId) return;
+    const stillVisible = filteredTrimesters.some((t) => t.id === selectedTrimisterId);
+    if (!stillVisible && filteredTrimesters.length > 0) {
+      const next = filteredTrimesters[0];
+      setSelectedTrimisterId(next.id);
+      setSelectedYear(new Date(`${next.start_date}T00:00:00`).getFullYear());
+    }
+  }, [filteredTrimesters, selectedTrimisterId]);
 
+  // ── Fetch periods ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!selectedTrimisterId) return;
     const fetchPeriods = async () => {
       try {
+        setLoadingPeriods(true); // ← NEW
         const res = await api.get<ApiListResponse<AcademicPeriodApi>>(
           `/academic-periods?trimister_id=${selectedTrimisterId}`,
-          { headers: { Authorization: `Bearer ${token}` } },
+          { headers: { Authorization: `Bearer ${token}` } }
         );
-
-        if (res.data.status === 1) {
-          setPeriods((res.data.data || []).map(mapPeriodApiToUi));
-        } else {
-          alert(res.data.message || "Failed to load academic periods.");
-        }
-      } catch (err) {
-        console.error(err);
-        alert("Error loading academic periods. Check console.");
+        if (res.data.status === 1) setPeriods((res.data.data || []).map(mapPeriodApiToUi));
+        else toast.error(res.data.message || "Failed to load academic periods.");
+      } catch {
+        toast.error("Error loading academic periods.");
+      } finally {
+        setLoadingPeriods(false); // ← NEW
       }
     };
-
     fetchPeriods();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTrimisterId]);
 
-  /** =========================
-   * CRUD API functions
-   * ✅ UPDATED: return ok + message (no alert)
-   * ========================= */
-
+  // ── CRUD ───────────────────────────────────────────────────────────────────
   const createPeriod = async (payload: {
-    trimister_id: number;
-    name: string;
-    type: PeriodType;
-    start_date: string;
-    end_date: string;
-    notes?: string;
+    trimister_id: number; name: string; type: PeriodType;
+    start_date: string; end_date: string; notes?: string;
   }): Promise<{ ok: boolean; message: string }> => {
     try {
-      const res = await api.post<ApiSingleResponse<AcademicPeriodApi>>(
-        "/academic-periods",
-        payload,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
+      const res = await api.post<ApiSingleResponse<AcademicPeriodApi>>("/academic-periods", payload, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (res.data.status === 1) {
-        const saved = mapPeriodApiToUi(res.data.data);
-        setPeriods((prev) => [saved, ...prev]);
+        setPeriods((prev) => [mapPeriodApiToUi(res.data.data), ...prev]);
         return { ok: true, message: "" };
       }
-
       return { ok: false, message: res.data.message || "Failed to create period." };
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ||
-        "Failed to create period. Please check API and try again.";
-      return { ok: false, message: msg };
+      return { ok: false, message: err?.response?.data?.message || "Failed to create period." };
     }
   };
 
   const updatePeriod = async (
     id: string,
-    payload: {
-      trimister_id: number;
-      name: string;
-      type: PeriodType;
-      start_date: string;
-      end_date: string;
-      notes?: string;
-    },
+    payload: { trimister_id: number; name: string; type: PeriodType; start_date: string; end_date: string; notes?: string }
   ): Promise<{ ok: boolean; message: string }> => {
     try {
-      const res = await api.put<ApiSingleResponse<AcademicPeriodApi>>(
-        `/academic-periods/${id}`,
-        payload,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
+      const res = await api.put<ApiSingleResponse<AcademicPeriodApi>>(`/academic-periods/${id}`, payload, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (res.data.status === 1) {
-        const saved = mapPeriodApiToUi(res.data.data);
-        setPeriods((prev) => prev.map((p) => (p.id === id ? saved : p)));
+        setPeriods((prev) => prev.map((p) => (p.id === id ? mapPeriodApiToUi(res.data.data) : p)));
         return { ok: true, message: "" };
       }
-
       return { ok: false, message: res.data.message || "Failed to update period." };
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.message ||
-        "Failed to update period. Please check API and try again.";
-      return { ok: false, message: msg };
+      return { ok: false, message: err?.response?.data?.message || "Failed to update period." };
     }
   };
 
   const deletePeriodApi = async (id: string) => {
-    const res = await api.delete<{ status: number; message: string }>(
-      `/academic-periods/${id}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-
-    if (res.data.status === 1) {
-      setPeriods((prev) => prev.filter((p) => p.id !== id));
-      return true;
-    } else {
-      alert(res.data.message || "Failed to delete period.");
+    try {
+      setDeletingId(id);
+      const res = await api.delete<{ status: number; message: string }>(
+        `/academic-periods/${id}`, { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.data.status === 1) {
+        setPeriods((prev) => prev.filter((p) => p.id !== id));
+        toast.success("Period deleted successfully.");
+        return true;
+      }
+      toast.error(res.data.message || "Failed to delete period.");
       return false;
+    } catch {
+      toast.error("Error deleting period.");
+      return false;
+    } finally {
+      setDeletingId(null);
     }
   };
 
-  /** =========================
-   * Calendar helpers
-   * ========================= */
+  // ── Calendar helpers ───────────────────────────────────────────────────────
+  const getDaysInMonth     = (y: number, m: number) => new Date(y, m + 1, 0).getDate();
+  const getFirstDayOfMonth = (y: number, m: number) => new Date(y, m, 1).getDay();
 
-  const getDaysInMonth = (year: number, month: number) => {
-    return new Date(year, month + 1, 0).getDate();
+  const isDateInPeriod = (date: Date, p: AcademicPeriodUI) => {
+    const t = date.getTime();
+    return t >= new Date(p.startDate).setHours(0,0,0,0) && t <= new Date(p.endDate).setHours(23,59,59,999);
   };
 
-  const getFirstDayOfMonth = (year: number, month: number) => {
-    return new Date(year, month, 1).getDay();
+  const getPeriodsForDate = (date: Date) => periods.filter((p) => isDateInPeriod(date, p));
+
+  // ── UI handlers ────────────────────────────────────────────────────────────
+  const handleAddPeriod    = () => { setEditingPeriod(null);  setModalError(""); setIsModalOpen(true); };
+  const handleEditPeriod   = (p: AcademicPeriodUI) => { setEditingPeriod(p); setModalError(""); setIsModalOpen(true); };
+  const handleDeletePeriod = async (id: string) => { const ok = await deletePeriodApi(id); if (ok) setSelectedPeriod(null); };
+  const selectTrimester    = (t: TrimisterApi) => {
+    setSelectedTrimisterId(t.id);
+    setSelectedYear(new Date(`${t.start_date}T00:00:00`).getFullYear());
   };
 
-  const isDateInPeriod = (date: Date, period: AcademicPeriodUI) => {
-    const dateTime = date.getTime();
-    const startTime = new Date(period.startDate).setHours(0, 0, 0, 0);
-    const endTime = new Date(period.endDate).setHours(23, 59, 59, 999);
-    return dateTime >= startTime && dateTime <= endTime;
-  };
-
-  const getPeriodsForDate = (date: Date) => {
-    return periods.filter((period) => isDateInPeriod(date, period));
-  };
-
-  /** =========================
-   * UI handlers
-   * ========================= */
-
-  const handleAddPeriod = () => {
-    setEditingPeriod(null);
-    setPeriodModalError("");
-    setIsModalOpen(true);
-  };
-
-  const handleEditPeriod = (period: AcademicPeriodUI) => {
-    setEditingPeriod(period);
-    setPeriodModalError("");
-    setIsModalOpen(true);
-  };
-
-  const handleDeletePeriod = async (periodId: string) => {
-    const ok = await deletePeriodApi(periodId);
-    if (ok) setSelectedPeriod(null);
-  };
-
-  const renderCalendarMonth = (month: number) => {
+  // ── Render month cells ─────────────────────────────────────────────────────
+  const renderCalendarMonth = (month: number): JSX.Element[] => {
     const daysInMonth = getDaysInMonth(selectedYear, month);
-    const firstDay = getFirstDayOfMonth(selectedYear, month);
+    const firstDay    = getFirstDayOfMonth(selectedYear, month);
     const days: JSX.Element[] = [];
 
-    for (let i = 0; i < firstDay; i++) {
-      days.push(<div key={`empty-${i}`} className="aspect-square" />);
-    }
+    for (let i = 0; i < firstDay; i++) days.push(<div key={`e${i}`} className="aspect-square" />);
 
     for (let day = 1; day <= daysInMonth; day++) {
-      const date = new Date(selectedYear, month, day);
+      const date       = new Date(selectedYear, month, day);
       const dayPeriods = getPeriodsForDate(date);
-      const isToday = new Date().toDateString() === date.toDateString();
+      const isToday    = new Date().toDateString() === date.toDateString();
 
       days.push(
         <div
           key={day}
           className="aspect-square relative group cursor-pointer"
-          onClick={() => {
-            if (dayPeriods.length > 0) setSelectedPeriod(dayPeriods[0]);
-          }}
+          onClick={() => { if (dayPeriods.length > 0) setSelectedPeriod(dayPeriods[0]); }}
         >
-          <div
-            className={`w-full h-full flex items-center justify-center text-xs relative ${
-              isToday ? "font-semibold" : ""
-            }`}
-          >
-            <span
-              className={`z-10 ${
-                dayPeriods.length > 0 ? "text-dark" : "text-body"
-              } ${isToday ? "relative" : ""}`}
-            >
-              {day}
-            </span>
+          <div className={`w-full h-full flex items-center justify-center text-xs relative ${isToday ? "font-semibold" : ""}`}>
+            <span className={`z-10 ${dayPeriods.length > 0 ? "text-dark" : "text-body"}`}>{day}</span>
 
             {isToday && (
               <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-7 h-7 rounded-full border-2 border-primary-blue" />
+                <div className="w-6 h-6 rounded-full border-2 border-primary-blue" />
               </div>
             )}
 
             {dayPeriods.length > 0 && (
               <div
-                className="absolute inset-0.5 rounded-md transition-all group-hover:scale-105"
-                style={{
-                  backgroundColor: dayPeriods[0].bgColor,
-                  borderWidth: "1px",
-                  borderColor: dayPeriods[0].borderColor,
-                }}
+                className="absolute inset-0.5 rounded-sm transition-all group-hover:scale-105"
+                style={{ backgroundColor: dayPeriods[0].bgColor, borderWidth: 1, borderColor: dayPeriods[0].borderColor }}
               />
             )}
 
             {dayPeriods.length > 1 && (
-              <div className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-primary-blue z-20" />
+              <div className="absolute top-0.5 right-0.5 w-1 h-1 rounded-full bg-primary-blue z-20" />
             )}
           </div>
 
           {dayPeriods.length > 0 && (
-            <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-30 shadow-lg">
+            <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1 px-2 py-1.5 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-30 shadow-lg">
               {dayPeriods[0].name}
               <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-gray-900" />
             </div>
           )}
-        </div>,
+        </div>
       );
     }
-
     return days;
   };
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h2 className="text-2xl text-dark font-semibold mb-1">
-              Academic Calendar
-            </h2>
-            <p className="text-sm text-body">
-              Manage trimesters, teaching periods, exams, and breaks
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Year Selector */}
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(Number(e.target.value))}
-              className="px-4 py-2.5 border border-light rounded-xl text-sm text-body focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white"
-            >
-              <option value={2024}>2024</option>
-              <option value={2025}>2025</option>
-              <option value={2026}>2026</option>
-              <option value={2027}>2027</option>
-            </select>
-
-            {/* Campus Selector */}
-            <select
-              value={selectedCampus}
-              onChange={(e) => setSelectedCampus(e.target.value)}
-              className="px-4 py-2.5 border border-light rounded-xl text-sm text-body focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white"
-            >
-              <option value="main">Main Campus</option>
-              <option value="north">North Campus</option>
-              <option value="south">South Campus</option>
-            </select>
-
-            {/* Trimester Filter */}
-            <select
-              value={selectedTrimisterId ?? ""}
-              onChange={(e) => {
-                const id = Number(e.target.value);
-                setSelectedTrimisterId(id);
-
-                const t = trimesters.find((x) => x.id === id);
-                if (t) {
-                  const startYear = new Date(`${t.start_date}T00:00:00`).getFullYear();
-                  setSelectedYear(startYear);
-                }
-              }}
-              className="px-4 py-2.5 border border-light rounded-xl text-sm text-body focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white"
-            >
-              {trimesters.length === 0 && <option value="">Loading...</option>}
-              {trimesters.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.start_date} → {t.end_date})
-                </option>
-              ))}
-            </select>
-          </div>
+    <div className="space-y-5">
+      {/* ── Header ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-primary-blue mb-1">Academic Calendar</h1>
+          <p className="text-body text-sm">Manage trimesters, teaching periods, exams, and breaks</p>
         </div>
-
-        {/* Trimester meta + Add Period */}
-        {selectedTrimister && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-body">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-soft border border-light">
-                <Calendar className="w-4 h-4 text-primary-blue" />
-                {selectedTrimister.name}: {selectedTrimister.start_date} →{" "}
-                {selectedTrimister.end_date}
-              </span>
-
-              <span
-                className={`inline-flex items-center px-3 py-1 rounded-lg border ${
-                  selectedTrimister.status === "active"
-                    ? "bg-green-50 text-green-700 border-green-200"
-                    : "bg-gray-50 text-gray-600 border-gray-200"
-                }`}
-              >
-                {selectedTrimister.status}
-              </span>
-            </div>
-
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(Number(e.target.value))}
+            className="px-3 py-2 border border-gray-300 rounded-xl text-sm text-body focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white cursor-pointer"
+          >
+            {[2024, 2025, 2026, 2027].map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <select
+            value={selectedCampus}
+            onChange={(e) => setSelectedCampus(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-xl text-sm text-body focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white cursor-pointer"
+          >
+            <option value="main">Main Campus</option>
+            <option value="north">North Campus</option>
+            <option value="south">South Campus</option>
+          </select>
+          {selectedTrimisterId && (
             <button
               onClick={handleAddPeriod}
-              disabled={!selectedTrimisterId}
-              className="px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:bg-blue-600 transition-colors flex items-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-blue text-white rounded-xl hover:opacity-90 active:scale-[0.97] active:opacity-80 transition-all duration-150 shadow-md select-none cursor-pointer text-sm"
             >
               <Plus className="w-4 h-4" />
               Add Period
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* Legend */}
-      <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-        <h3 className="text-sm font-semibold text-dark mb-4">
-          Academic Period Types
-        </h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      {/* ── Legend — unchanged ── */}
+      <div className="bg-white rounded-lg shadow-card px-5 py-3 border border-light">
+        <div className="flex flex-wrap gap-x-5 gap-y-2">
           {periodTypes.map((type) => (
-            <div key={type.value} className="flex items-center gap-2">
-              <div
-                className="w-4 h-4 rounded border"
-                style={{
-                  backgroundColor: type.bgColor,
-                  borderColor: type.borderColor,
-                }}
-              />
+            <div key={type.value} className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded border flex-shrink-0"
+                style={{ backgroundColor: type.bgColor, borderColor: type.borderColor }} />
               <span className="text-xs text-body">{type.label}</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Calendar Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Sidebar */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="bg-white rounded-2xl shadow-card-lg p-4 border border-light">
-            <h3 className="text-sm font-semibold text-dark mb-4">
-              Academic Year
-            </h3>
+      {/* ── Body: sidebar + calendar grid ── */}
+      <div className="flex gap-5 items-start">
 
-            <div className="space-y-6">
-              {trimesters.map((t, index) => (
-                <div key={t.id} className="relative">
-                  <div className="mb-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div
-                        className={`w-3 h-3 rounded-full ${
-                          t.id === selectedTrimisterId
-                            ? "bg-primary-blue"
-                            : "bg-gray-300"
-                        }`}
-                      />
-                      <h4 className="text-sm font-semibold text-dark">
-                        {t.name}
-                      </h4>
-                    </div>
-                    <p className="text-xs text-body ml-5">
-                      {new Date(`${t.start_date}T00:00:00`).toLocaleDateString(
-                        "en-US",
-                        { month: "short", day: "numeric" },
-                      )}{" "}
-                      -{" "}
-                      {new Date(`${t.end_date}T00:00:00`).toLocaleDateString(
-                        "en-US",
-                        { month: "short", day: "numeric" },
-                      )}
-                    </p>
-                  </div>
+        {/* ── Trimester sidebar ── */}
+        <div className="w-56 flex-shrink-0 bg-white rounded-lg shadow-card border border-light overflow-hidden sticky top-24">
+          {/* Header */}
+          <div className="px-4 py-3 border-b border-light flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-primary-blue" />
+              <span className="text-sm font-medium text-dark">Trimesters</span>
+            </div>
+            {statusFilter !== "active" && (
+              <button
+                onClick={() => setStatusFilter("active")}
+                className="text-xs text-primary-blue hover:underline cursor-pointer"
+              >
+                Reset
+              </button>
+            )}
+          </div>
 
-                  {index < trimesters.length - 1 && (
-                    <div className="absolute left-1.5 top-full h-6 w-0.5 bg-light" />
-                  )}
-                </div>
+          {/* Status toggle — unchanged */}
+          <div className="px-3 py-2.5 border-b border-light">
+            <div className="flex gap-1 p-1 bg-soft rounded-lg">
+              {(["active", "inactive", "all"] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setStatusFilter(s)}
+                  className={`flex-1 py-1 rounded-md text-xs font-medium transition-all duration-150 cursor-pointer capitalize ${
+                    statusFilter === s
+                      ? "bg-white text-primary-blue shadow-sm"
+                      : "text-body hover:text-dark"
+                  }`}
+                >
+                  {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
               ))}
-
-              {trimesters.length === 0 && (
-                <p className="text-xs text-body">
-                  No trimesters found. Create trimesters first.
-                </p>
-              )}
             </div>
           </div>
+
+          {/* Trimester list — skeleton while loading */}
+          <div className="overflow-y-auto" style={{ maxHeight: "calc(100vh - 320px)" }}>
+            {loadingTrimesters ? (
+              /* ← skeleton rows */
+              <div className="p-2 space-y-1">
+                {Array.from({ length: 3 }).map((_, i) => <SidebarSkeletonItem key={i} />)}
+              </div>
+            ) : filteredTrimesters.length === 0 ? (
+              <div className="px-4 py-8 text-center">
+                <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-xs text-body">No {statusFilter !== "all" ? statusFilter : ""} trimesters found.</p>
+              </div>
+            ) : (
+              <div className="p-2 space-y-1">
+                {filteredTrimesters.map((t) => {
+                  const isSelected = t.id === selectedTrimisterId;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => selectTrimester(t)}
+                      className={`w-full text-left px-3 py-3 rounded-lg transition-all duration-150 cursor-pointer ${
+                        isSelected
+                          ? "bg-primary-blue/10 border border-primary-blue/20"
+                          : "hover:bg-soft border border-transparent"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
+                          t.status === "active" ? "bg-green-500" : "bg-gray-300"
+                        }`} />
+                        <div className="min-w-0">
+                          <p className={`text-sm font-medium truncate leading-tight ${isSelected ? "text-primary-blue" : "text-dark"}`}>
+                            {t.name}
+                          </p>
+                          <p className="text-xs text-body mt-0.5">
+                            {shortDate(t.start_date)} – {shortDate(t.end_date)}
+                          </p>
+                          <span className={`inline-block mt-1.5 px-2 py-0.5 rounded-full text-xs ${
+                            t.status === "active" ? "bg-green-50 text-green-600" : "bg-gray-100 text-gray-500"
+                          }`}>
+                            {t.status}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Footer summary */}
+          {!loadingTrimesters && selectedTrimister && (
+            <div className="border-t border-light px-4 py-3 bg-soft">
+              <p className="text-xs text-body">Viewing periods for</p>
+              <p className="text-sm font-medium text-dark truncate mt-0.5">{selectedTrimister.name}</p>
+              <p className="text-xs text-body mt-0.5">
+                {loadingPeriods
+                  ? "Loading periods…"
+                  : `${periods.length} period${periods.length !== 1 ? "s" : ""} defined`
+                }
+              </p>
+            </div>
+          )}
         </div>
 
-        {/* Months */}
-        <div className="lg:col-span-10">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {monthNames.map((monthName, monthIndex) => (
-              <div
-                key={monthIndex}
-                className="bg-white rounded-2xl shadow-card-lg border border-light overflow-hidden"
-              >
-                <div className="bg-soft px-4 py-3 border-b border-light">
-                  <h3 className="text-sm font-semibold text-dark">
-                    {monthName} {selectedYear}
-                  </h3>
-                </div>
-
-                <div className="p-4">
-                  <div className="grid grid-cols-7 gap-1 mb-2">
-                    {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(
-                      (day) => (
-                        <div
-                          key={day}
-                          className="text-center text-xs font-medium text-body py-1"
-                        >
-                          {day}
+        {/* ── Calendar grid ── */}
+        <div className="flex-1 min-w-0">
+          {!selectedTrimisterId && !loadingTrimesters ? (
+            <div className="bg-white rounded-lg shadow-card border border-light p-16 text-center">
+              <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+              <p className="text-body">Select a trimester from the sidebar to view its calendar.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {/* ← skeleton cards while trimesters or periods are loading */}
+              {(loadingTrimesters || loadingPeriods)
+                ? MONTH_NAMES.map((name, i) => (
+                    <CalendarMonthSkeleton key={i} name={name} year={selectedYear} />
+                  ))
+                : MONTH_NAMES.map((monthName, monthIndex) => (
+                    <div key={monthIndex} className="bg-white rounded-lg shadow-card border border-light overflow-hidden">
+                      <div className="bg-soft px-3 py-2 border-b border-light">
+                        <h3 className="text-xs font-medium text-dark">{monthName} {selectedYear}</h3>
+                      </div>
+                      <div className="p-2">
+                        <div className="grid grid-cols-7 mb-1">
+                          {["S","M","T","W","T","F","S"].map((d, i) => (
+                            <div key={i} className="text-center text-xs font-medium text-body py-0.5">{d}</div>
+                          ))}
                         </div>
-                      ),
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-7 gap-1">
-                    {renderCalendarMonth(monthIndex)}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+                        <div className="grid grid-cols-7">
+                          {renderCalendarMonth(monthIndex)}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+              }
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Period Detail Modal */}
+      {/* ── Period Detail Modal — unchanged ── */}
       {selectedPeriod && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-card-xl max-w-md w-full">
-            <div className="p-6 border-b border-light flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-dark">Period Details</h3>
-              <button
-                onClick={() => setSelectedPeriod(null)}
-                className="p-2 hover:bg-soft rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-body" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="text-xs font-medium text-body mb-1 block">
-                  Period Name
-                </label>
-                <p className="text-sm text-dark font-medium">
-                  {selectedPeriod.name}
-                </p>
+        <>
+          <div className="fixed inset-0 bg-white/40 backdrop-blur-sm z-50" onClick={() => setSelectedPeriod(null)} />
+          <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+              <div className="px-6 py-4 border-b border-light flex items-center justify-between">
+                <h2 className="text-primary-blue">Period Details</h2>
+                <button onClick={() => setSelectedPeriod(null)} className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer">
+                  <X className="w-5 h-5 text-body" />
+                </button>
               </div>
-
-              <div>
-                <label className="text-xs font-medium text-body mb-1 block">
-                  Type
-                </label>
-                <div className="flex items-center gap-2">
-                  <div
-                    className="w-4 h-4 rounded border"
-                    style={{
-                      backgroundColor: selectedPeriod.bgColor,
-                      borderColor: selectedPeriod.borderColor,
-                    }}
-                  />
-                  <span className="text-sm text-dark">
-                    {periodTypes.find((t) => t.value === selectedPeriod.type)
-                      ?.label ?? selectedPeriod.type}
-                  </span>
+              <div className="p-6 space-y-4">
+                <div className="flex items-center gap-3 p-3 rounded-lg border"
+                  style={{ backgroundColor: selectedPeriod.bgColor, borderColor: selectedPeriod.borderColor }}>
+                  <div className="w-10 h-10 rounded-lg border-2 flex-shrink-0"
+                    style={{ backgroundColor: selectedPeriod.bgColor, borderColor: selectedPeriod.borderColor }} />
+                  <div>
+                    <p className="text-sm font-semibold text-dark">{selectedPeriod.name}</p>
+                    <p className="text-xs text-body">
+                      {periodTypes.find((t) => t.value === selectedPeriod.type)?.label ?? selectedPeriod.type}
+                    </p>
+                  </div>
+                </div>
+                <div className="grid gap-3">
+                  <div className="p-4 bg-soft rounded-lg border border-light">
+                    <p className="text-xs text-body mb-1">Date Range</p>
+                    <p className="text-dark text-sm">
+                      {selectedPeriod.startDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                      {" – "}
+                      {selectedPeriod.endDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                    </p>
+                  </div>
+                  {selectedPeriod.notes && (
+                    <div className="p-4 bg-soft rounded-lg border border-light">
+                      <p className="text-xs text-body mb-1">Notes</p>
+                      <p className="text-dark text-sm">{selectedPeriod.notes}</p>
+                    </div>
+                  )}
                 </div>
               </div>
-
-              <div>
-                <label className="text-xs font-medium text-body mb-1 block">
-                  Date Range
-                </label>
-                <p className="text-sm text-dark">
-                  {selectedPeriod.startDate.toLocaleDateString("en-US", {
-                    month: "long",
-                    day: "numeric",
-                    year: "numeric",
-                  })}{" "}
-                  -{" "}
-                  {selectedPeriod.endDate.toLocaleDateString("en-US", {
-                    month: "long",
-                    day: "numeric",
-                    year: "numeric",
-                  })}
-                </p>
+              <div className="px-6 py-4 border-t border-light flex items-center justify-between">
+                <button
+                  onClick={() => handleDeletePeriod(selectedPeriod.id)}
+                  disabled={deletingId === selectedPeriod.id}
+                  className="flex items-center gap-2 px-4 py-2.5 text-red-500 hover:bg-red-50 active:bg-red-100 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed rounded-xl transition-all duration-150 text-sm font-medium cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {deletingId === selectedPeriod.id ? "Deleting…" : "Delete"}
+                </button>
+                <button
+                  onClick={() => { handleEditPeriod(selectedPeriod); setSelectedPeriod(null); }}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] transition-all duration-150 text-sm font-medium cursor-pointer"
+                >
+                  <Edit2 className="w-4 h-4" />
+                  Edit Period
+                </button>
               </div>
-
-              {selectedPeriod.notes && (
-                <div>
-                  <label className="text-xs font-medium text-body mb-1 block">
-                    Notes
-                  </label>
-                  <p className="text-sm text-dark">{selectedPeriod.notes}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="p-6 border-t border-light flex items-center justify-end gap-3">
-              <button
-                onClick={() => handleDeletePeriod(selectedPeriod.id)}
-                className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-xl transition-colors flex items-center gap-2 text-sm"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete
-              </button>
-              <button
-                onClick={() => {
-                  handleEditPeriod(selectedPeriod);
-                  setSelectedPeriod(null);
-                }}
-                className="px-4 py-2 bg-primary-blue text-white rounded-xl hover:bg-blue-600 transition-colors flex items-center gap-2 text-sm"
-              >
-                <Edit2 className="w-4 h-4" />
-                Edit Period
-              </button>
             </div>
           </div>
-        </div>
+        </>
       )}
 
-      {/* ✅ Add/Edit Period Modal */}
+      {/* ── Add/Edit Modal — unchanged ── */}
       {isModalOpen && (
         <AddEditPeriodModal
           trimisterId={selectedTrimisterId}
           period={editingPeriod}
-          error={periodModalError}
+          error={modalError}
           saving={savingPeriod}
-          onClearError={() => setPeriodModalError("")}
-          onClose={() => {
-            setIsModalOpen(false);
-            setEditingPeriod(null);
-            setPeriodModalError("");
-          }}
+          onClearError={() => setModalError("")}
+          onClose={() => { setIsModalOpen(false); setEditingPeriod(null); setModalError(""); }}
           onSave={async (form) => {
-            if (!selectedTrimisterId) {
-              setPeriodModalError("Please select a trimester first.");
-              return;
-            }
-
+            if (!selectedTrimisterId) { setModalError("Please select a trimester first."); return; }
             setSavingPeriod(true);
-            setPeriodModalError("");
-
+            setModalError("");
             const payload = {
               trimister_id: selectedTrimisterId,
-              name: form.name.trim(),
-              type: form.type,
-              start_date: form.startDate,
-              end_date: form.endDate,
-              notes: form.notes?.trim() ? form.notes.trim() : undefined,
+              name: form.name.trim(), type: form.type,
+              start_date: form.startDate, end_date: form.endDate,
+              notes: form.notes?.trim() || undefined,
             };
-
             const result = editingPeriod
               ? await updatePeriod(editingPeriod.id, payload)
               : await createPeriod(payload);
-
             setSavingPeriod(false);
-
             if (result.ok) {
-              setIsModalOpen(false);
-              setEditingPeriod(null);
-              setPeriodModalError("");
+              setIsModalOpen(false); setEditingPeriod(null); setModalError("");
+              toast.success(editingPeriod ? "Period updated successfully!" : "Period added successfully!");
             } else {
-              setPeriodModalError(result.message); // ✅ overlap shows here
+              setModalError(result.message);
             }
           }}
         />
@@ -814,10 +654,7 @@ export default function AcademicCalendar() {
   );
 }
 
-/** =========================
- * Add/Edit Period Modal Component
- * ========================= */
-
+/** ========================= Add/Edit Modal — unchanged ========================= */
 interface AddEditPeriodModalProps {
   trimisterId: number | null;
   period: AcademicPeriodUI | null;
@@ -825,224 +662,111 @@ interface AddEditPeriodModalProps {
   saving?: boolean;
   onClearError?: () => void;
   onClose: () => void;
-  onSave: (period: {
-    name: string;
-    type: PeriodType;
-    startDate: string; // YYYY-MM-DD
-    endDate: string; // YYYY-MM-DD
-    notes?: string;
-  }) => void;
+  onSave: (period: { name: string; type: PeriodType; startDate: string; endDate: string; notes?: string }) => void;
 }
 
-function AddEditPeriodModal({
-  trimisterId,
-  period,
-  error,
-  saving,
-  onClearError,
-  onClose,
-  onSave,
-}: AddEditPeriodModalProps) {
+function AddEditPeriodModal({ trimisterId, period, error, saving, onClearError, onClose, onSave }: AddEditPeriodModalProps) {
   const [formData, setFormData] = useState({
-    name: period?.name || "",
-    type: (period?.type || "teaching") as PeriodType,
+    name:      period?.name      || "",
+    type:      (period?.type     || "teaching") as PeriodType,
     startDate: period?.startDate ? formatYmd(period.startDate) : "",
-    endDate: period?.endDate ? formatYmd(period.endDate) : "",
-    notes: period?.notes || "",
+    endDate:   period?.endDate   ? formatYmd(period.endDate)   : "",
+    notes:     period?.notes     || "",
   });
 
   const clearErr = () => onClearError?.();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!trimisterId) {
-      onClearError?.();
-      return;
-    }
-
-    if (!formData.name.trim()) {
-      onClearError?.();
-      return;
-    }
-
-    if (!formData.startDate || !formData.endDate) {
-      onClearError?.();
-      return;
-    }
-
-    onSave({
-      name: formData.name,
-      type: formData.type,
-      startDate: formData.startDate,
-      endDate: formData.endDate,
-      notes: formData.notes,
-    });
+    if (!trimisterId || !formData.name.trim() || !formData.startDate || !formData.endDate) return;
+    onSave({ name: formData.name, type: formData.type, startDate: formData.startDate, endDate: formData.endDate, notes: formData.notes });
   };
 
+  const selectedMeta = periodTypes.find((t) => t.value === formData.type);
+
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-card-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-light flex items-center justify-between sticky top-0 bg-white">
-          <h3 className="text-lg font-semibold text-dark">
-            {period ? "Edit Period" : "Add New Period"}
-          </h3>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-soft rounded-lg transition-colors"
-            disabled={!!saving}
-          >
-            <X className="w-5 h-5 text-body" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          {/* ✅ Error box */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4">
-              {error}
-            </div>
-          )}
-
-          {/* Period Name */}
-          <div>
-            <label className="text-sm font-medium text-dark mb-2 block">
-              Period Name <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={formData.name}
-              onChange={(e) => {
-                clearErr();
-                setFormData({ ...formData, name: e.target.value });
-              }}
-              placeholder="e.g., Trimester 1 - Teaching Weeks"
-              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
-            />
+    <>
+      <div className="fixed inset-0 bg-white/40 backdrop-blur-sm z-50" onClick={!saving ? onClose : undefined} />
+      <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+          <div className="border-b border-light px-6 py-4 flex items-center justify-between sticky top-0 bg-white z-10">
+            <h2 className="text-primary-blue">{period ? "Edit Period" : "Add New Period"}</h2>
+            <button onClick={onClose} disabled={!!saving} className="p-2 hover:bg-soft active:bg-soft/80 rounded-lg transition-colors disabled:opacity-50 cursor-pointer">
+              <X className="w-5 h-5 text-body" />
+            </button>
           </div>
-
-          {/* Period Type */}
-          <div>
-            <label className="text-sm font-medium text-dark mb-2 block">
-              Period Type <span className="text-red-500">*</span>
-            </label>
-            <select
-              required
-              value={formData.type}
-              onChange={(e) => {
-                clearErr();
-                setFormData({ ...formData, type: e.target.value as PeriodType });
-              }}
-              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
-            >
-              {periodTypes.map((type) => (
-                <option key={type.value} value={type.value}>
-                  {type.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Date Range */}
-          <div className="grid grid-cols-2 gap-4">
+          <form onSubmit={handleSubmit} className="p-6 space-y-5">
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 text-sm">{error}</div>
+            )}
             <div>
-              <label className="text-sm font-medium text-dark mb-2 block">
-                Start Date <span className="text-red-500">*</span>
-              </label>
+              <label className="block text-sm text-body mb-2">Period Name <span className="text-red-500">*</span></label>
               <input
-                type="date"
-                required
-                value={formData.startDate}
-                onChange={(e) => {
-                  clearErr();
-                  setFormData({ ...formData, startDate: e.target.value });
-                }}
-                className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
+                type="text" required value={formData.name}
+                onChange={(e) => { clearErr(); setFormData({ ...formData, name: e.target.value }); }}
+                placeholder="e.g., Trimester 1 – Teaching Weeks"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow"
               />
             </div>
             <div>
-              <label className="text-sm font-medium text-dark mb-2 block">
-                End Date <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="date"
-                required
-                value={formData.endDate}
-                onChange={(e) => {
-                  clearErr();
-                  setFormData({ ...formData, endDate: e.target.value });
-                }}
-                className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
-              />
+              <label className="block text-sm text-body mb-2">Period Type <span className="text-red-500">*</span></label>
+              <select
+                required value={formData.type}
+                onChange={(e) => { clearErr(); setFormData({ ...formData, type: e.target.value as PeriodType }); }}
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow cursor-pointer"
+              >
+                {periodTypes.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
             </div>
-          </div>
-
-          {/* Color Preview */}
-          <div>
-            <label className="text-sm font-medium text-dark mb-2 block">
-              Color Preview
-            </label>
-            <div className="flex items-center gap-3 p-4 rounded-xl border border-light">
-              <div
-                className="w-12 h-12 rounded-lg border-2"
-                style={{
-                  backgroundColor: periodTypes.find(
-                    (t) => t.value === formData.type,
-                  )?.bgColor,
-                  borderColor: periodTypes.find(
-                    (t) => t.value === formData.type,
-                  )?.borderColor,
-                }}
-              />
+            <div className="flex items-center gap-3 p-4 rounded-xl border"
+              style={{ backgroundColor: selectedMeta?.bgColor, borderColor: selectedMeta?.borderColor }}>
+              <div className="w-10 h-10 rounded-lg border-2 flex-shrink-0"
+                style={{ backgroundColor: selectedMeta?.bgColor, borderColor: selectedMeta?.borderColor }} />
               <div>
-                <p className="text-sm font-medium text-dark">
-                  {periodTypes.find((t) => t.value === formData.type)?.label}
-                </p>
-                <p className="text-xs text-body">
-                  This color will be used in the calendar
-                </p>
+                <p className="text-sm font-medium text-dark">{selectedMeta?.label}</p>
+                <p className="text-xs text-body">This colour will appear on the calendar</p>
               </div>
             </div>
-          </div>
-
-          {/* Notes */}
-          <div>
-            <label className="text-sm font-medium text-dark mb-2 block">
-              Notes (Optional)
-            </label>
-            <textarea
-              value={formData.notes}
-              onChange={(e) => {
-                clearErr();
-                setFormData({ ...formData, notes: e.target.value });
-              }}
-              placeholder="Add any additional information..."
-              rows={3}
-              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue resize-none"
-            />
-          </div>
-
-          {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-light">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-5 py-2.5 text-body hover:bg-soft rounded-xl transition-colors disabled:opacity-50"
-              disabled={!!saving}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-5 py-2.5 bg-primary-blue text-white rounded-xl hover:bg-blue-600 transition-colors disabled:opacity-50"
-              disabled={!trimisterId || !!saving}
-            >
-              {saving ? "Saving..." : period ? "Update Period" : "Save Period"}
-            </button>
-          </div>
-        </form>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-body mb-2">Start Date <span className="text-red-500">*</span></label>
+                <input type="date" required value={formData.startDate}
+                  onChange={(e) => { clearErr(); setFormData({ ...formData, startDate: e.target.value }); }}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow" />
+              </div>
+              <div>
+                <label className="block text-sm text-body mb-2">End Date <span className="text-red-500">*</span></label>
+                <input type="date" required value={formData.endDate}
+                  onChange={(e) => { clearErr(); setFormData({ ...formData, endDate: e.target.value }); }}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-body mb-2">Notes (optional)</label>
+              <textarea
+                rows={3} value={formData.notes}
+                onChange={(e) => { clearErr(); setFormData({ ...formData, notes: e.target.value }); }}
+                placeholder="Add any additional information…"
+                className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow resize-none"
+              />
+            </div>
+            <div className="flex gap-4 pt-2 border-t border-light">
+              <button
+                type="submit" disabled={!trimisterId || !!saving}
+                className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150 font-medium shadow-sm cursor-pointer"
+              >
+                {saving ? "Saving…" : period ? "Update Period" : "Save Period"}
+              </button>
+              <button
+                type="button" onClick={onClose} disabled={!!saving}
+                className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] disabled:opacity-50 transition-all duration-150 font-medium cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

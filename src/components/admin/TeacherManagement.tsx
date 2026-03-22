@@ -1,52 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Plus,
-  Search,
-  Edit,
-  Eye,
-  Trash2,
-  Mail,
-  Phone,
-  Briefcase,
-  X,
-  Circle,
-  CheckCircle,
-  XCircle,
-  User,
-  Award,
+  Plus, Search, Edit, Eye, Trash2,
+  Mail, Phone, Briefcase, X,
+  CheckCircle, XCircle, User, Award,
+  ChevronLeft, ChevronRight, Loader2,
 } from "lucide-react";
 import { mockTeachers, Teacher } from "../../data/mockData";
 import api from "../../api/axios";
+import { toast } from "sonner";
 import {
   TeacherData,
   TeacherResponse,
   TeacherListResponse,
 } from "../../types/teacher";
 
-interface Toast {
-  id: string;
-  message: string;
-  type: "success" | "error";
-}
-
-const mapRoleFromApi = (
-  role: string | null,
-): "Lecturer" | "Marker" | "Both" | undefined => {
+// ── Role / status mappers ────────────────────────────────────────────────────
+const mapRoleFromApi = (role: string | null): "Lecturer" | "Marker" | "Both" | undefined => {
   if (!role) return undefined;
-  const normalized = role.toLowerCase();
-  if (normalized === "lecturer") return "Lecturer";
-  if (normalized === "marker") return "Marker";
-  if (normalized === "both") return "Both";
+  const n = role.toLowerCase();
+  if (n === "lecturer") return "Lecturer";
+  if (n === "marker")   return "Marker";
+  if (n === "both")     return "Both";
   return undefined;
 };
 
 const mapRoleToApi = (role: string | null) => {
   if (!role) return null;
-  const normalized = role.toLowerCase();
-  if (normalized === "lecturer") return "lecturer";
-  if (normalized === "marker") return "marker";
-  if (normalized === "both") return "both";
-  return role;
+  return role.toLowerCase();
 };
 
 const mapTeacherFromApi = (t: TeacherData): Teacher => ({
@@ -75,394 +55,370 @@ type TeacherFormState = {
   active: boolean;
 };
 
-const initialTeacherForm: TeacherFormState = {
-  name: "",
-  universityEmail: "",
-  personalEmail: "",
-  phone: "",
-  roleType: "",
-  expertise: "",
-  industryExperienceText: "",
-  industryField: "",
-  active: true,
+const initialForm: TeacherFormState = {
+  name: "", universityEmail: "", personalEmail: "", phone: "",
+  roleType: "", expertise: "", industryExperienceText: "", industryField: "", active: true,
 };
 
+const PAGE_SIZE = 10;
+
+// ── Shared badge components ──────────────────────────────────────────────────
+function RoleBadge({ role }: { role: Teacher["roleType"] }) {
+  if (role === "Lecturer") return <span className="inline-flex items-center px-2.5 py-1 bg-blue-50 text-primary-blue rounded-full text-xs font-medium">Lecturer</span>;
+  if (role === "Marker")   return <span className="inline-flex items-center px-2.5 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-medium">Marker</span>;
+  if (role === "Both")     return <span className="inline-flex items-center px-2.5 py-1 bg-purple-50 text-purple-600 rounded-full text-xs font-medium">Both</span>;
+  return <span className="inline-flex items-center px-2.5 py-1 bg-gray-100 text-gray-400 rounded-full text-xs">Not Set</span>;
+}
+
+function StatusBadge({ active }: { active: boolean }) {
+  return active
+    ? <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-green-50 text-green-600 rounded-full text-xs font-medium"><CheckCircle className="w-3 h-3" />Active</span>
+    : <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-gray-100 text-gray-500 rounded-full text-xs font-medium"><XCircle className="w-3 h-3" />Inactive</span>;
+}
+
+// ── Skeleton row (desktop) ───────────────────────────────────────────────────
+function SkeletonRow() {
+  return (
+    <tr className="border-t border-light">
+      <td className="px-6 py-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-gray-200 animate-pulse flex-shrink-0" />
+          <div className="space-y-1.5">
+            <div className="h-3.5 w-32 rounded bg-gray-200 animate-pulse" />
+            <div className="h-3 w-44 rounded bg-gray-200 animate-pulse" />
+          </div>
+        </div>
+      </td>
+      <td className="px-6 py-4"><div className="h-6 w-20 rounded-full bg-gray-200 animate-pulse" /></td>
+      <td className="px-6 py-4"><div className="h-6 w-16 rounded-full bg-gray-200 animate-pulse" /></td>
+      <td className="px-6 py-4"><div className="h-4 w-28 rounded bg-gray-200 animate-pulse" /></td>
+      <td className="px-6 py-4">
+        <div className="flex gap-1.5">
+          <div className="w-7 h-7 rounded-lg bg-gray-200 animate-pulse" />
+          <div className="w-7 h-7 rounded-lg bg-gray-200 animate-pulse" />
+          <div className="w-7 h-7 rounded-lg bg-gray-200 animate-pulse" />
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ── Main component ───────────────────────────────────────────────────────────
 export default function TeacherManagement() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
-  const [showAddDrawer, setShowAddDrawer] = useState(false);
-  const [showViewModal, setShowViewModal] = useState(false);
+  const [loading,  setLoading]  = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const [showAddDrawer,     setShowAddDrawer]     = useState(false);
+  const [showViewModal,     setShowViewModal]     = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [selectedTeacher, setSelectedTeacher] = useState<Teacher | null>(null);
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [editTeacherId, setEditTeacherId] = useState<string | null>(null);
+  const [selectedTeacher,   setSelectedTeacher]   = useState<Teacher | null>(null);
+  const [deleteTargetId,    setDeleteTargetId]    = useState<string | null>(null);
+  const [deleting,          setDeleting]          = useState(false);
 
-  const [form, setForm] = useState<TeacherFormState>(initialTeacherForm);
-  const [submitting, setSubmitting] = useState(false);
+  const [isEditMode,     setIsEditMode]     = useState(false);
+  const [editTeacherId,  setEditTeacherId]  = useState<string | null>(null);
+  const [form,           setForm]           = useState<TeacherFormState>(initialForm);
+  const [submitting,     setSubmitting]     = useState(false);
 
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchTerm,      setSearchTerm]      = useState("");
   const [filterExpertise, setFilterExpertise] = useState("");
-  const [filterProgramLevel, setFilterProgramLevel] = useState("");
-  const [filterStatus, setFilterStatus] = useState("");
-  const [filterRoleType, setFilterRoleType] = useState("");
+  const [filterStatus,    setFilterStatus]    = useState("");
+  const [filterRoleType,  setFilterRoleType]  = useState("");
 
   const expertiseAreas = useMemo(
-    () =>
-      Array.from(new Set(mockTeachers.map((t) => t.expertise))).filter(Boolean),
-    [],
+    () => Array.from(new Set(mockTeachers.map((t) => t.expertise))).filter(Boolean),
+    []
   );
 
-  // Toast
-  const showToast = (
-    message: string,
-    type: "success" | "error" = "success",
-  ) => {
-    const id = Math.random().toString(36).substr(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((toast) => toast.id !== id));
-    }, 3000);
-  };
+  const hasFilters = !!(searchTerm || filterExpertise || filterRoleType || filterStatus);
 
   const clearFilters = () => {
-    setFilterExpertise("");
-    setFilterRoleType("");
-    setFilterProgramLevel("");
-    setFilterStatus("");
-    setSearchTerm("");
+    setSearchTerm(""); setFilterExpertise(""); setFilterRoleType(""); setFilterStatus("");
   };
-
-  const filteredTeachers = useMemo(() => {
-    return teachers.filter((teacher) => {
-      const matchesSearch =
-        teacher.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        teacher.universityEmail
-          .toLowerCase()
-          .includes(searchTerm.toLowerCase());
-
-      const matchesExpertise =
-        !filterExpertise || teacher.expertise === filterExpertise;
-
-      const matchesStatus =
-        !filterStatus ||
-        (filterStatus === "Active" && teacher.activeThisTrimester) ||
-        (filterStatus === "Inactive" && !teacher.activeThisTrimester) ||
-        (filterStatus === "Industry Only" && teacher.currentlyInIndustry);
-
-      const matchesRoleType =
-        !filterRoleType || teacher.roleType === filterRoleType;
-
-      return (
-        matchesSearch && matchesExpertise && matchesStatus && matchesRoleType
-      );
-    });
-  }, [teachers, searchTerm, filterExpertise, filterStatus, filterRoleType]);
 
   const token = () => localStorage.getItem("token");
 
-  // FETCH TEACHERS (API)
+  // ── Filtered + paginated ──────────────────────────────────────────────────
+  const filteredTeachers = useMemo(() =>
+    teachers.filter((t) => {
+      const matchesSearch =
+        t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        t.universityEmail.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesExpertise  = !filterExpertise || t.expertise === filterExpertise;
+      const matchesStatus     =
+        !filterStatus ||
+        (filterStatus === "Active"        && t.activeThisTrimester) ||
+        (filterStatus === "Inactive"      && !t.activeThisTrimester) ||
+        (filterStatus === "Industry Only" && t.currentlyInIndustry);
+      const matchesRoleType   = !filterRoleType || t.roleType === filterRoleType;
+      return matchesSearch && matchesExpertise && matchesStatus && matchesRoleType;
+    }),
+    [teachers, searchTerm, filterExpertise, filterStatus, filterRoleType]
+  );
+
+  useEffect(() => { setCurrentPage(1); }, [searchTerm, filterExpertise, filterStatus, filterRoleType]);
+
+  const totalItems = filteredTeachers.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const safePage   = Math.min(currentPage, totalPages);
+
+  const paginatedTeachers = useMemo(() => {
+    const start = (safePage - 1) * PAGE_SIZE;
+    return filteredTeachers.slice(start, start + PAGE_SIZE);
+  }, [filteredTeachers, safePage]);
+
+  const fromItem = totalItems === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
+  const toItem   = Math.min(safePage * PAGE_SIZE, totalItems);
+
+  const pageNumbers = useMemo(() => {
+    const range: number[] = [];
+    for (let i = Math.max(1, safePage - 2); i <= Math.min(totalPages, safePage + 2); i++) range.push(i);
+    return range;
+  }, [safePage, totalPages]);
+
+  // ── Fetch ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     const fetchTeachers = async () => {
       try {
+        setLoading(true);
         const res = await api.get<TeacherListResponse>("/teachers", {
           headers: { Authorization: `Bearer ${token()}` },
           params: {
-            role: filterRoleType ? mapRoleToApi(filterRoleType) : undefined,
-            search: searchTerm || undefined,
+            role:   filterRoleType ? mapRoleToApi(filterRoleType) : undefined,
+            search: searchTerm     || undefined,
           },
         });
-
         if (res.data.status === 1) {
-          const fetchedTeachers = res.data.data.map(mapTeacherFromApi);
-          setTeachers(fetchedTeachers);
+          setTeachers(res.data.data.map(mapTeacherFromApi));
         } else {
-          showToast("Failed to fetch teachers: " + res.data.message, "error");
+          toast.error("Failed to fetch teachers: " + res.data.message);
         }
-      } catch (err) {
-        console.error("Error fetching teachers:", err);
-        showToast("Error fetching teachers. Check console.", "error");
+      } catch {
+        toast.error("Error fetching teachers. Check console.");
+      } finally {
+        setLoading(false);
       }
     };
-
     fetchTeachers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterRoleType, searchTerm]);
 
-  // VIEW
-  const handleViewTeacher = (teacher: Teacher) => {
-    setSelectedTeacher(teacher);
-    setShowViewModal(true);
-  };
+  // ── View ──────────────────────────────────────────────────────────────────
+  const handleViewTeacher = (t: Teacher) => { setSelectedTeacher(t); setShowViewModal(true); };
 
-  // DELETE
-  const handleDeleteClick = (id: string) => {
-    setDeleteTargetId(id);
-    setShowDeleteConfirm(true);
-  };
+  // ── Delete ────────────────────────────────────────────────────────────────
+  const handleDeleteClick = (id: string) => { setDeleteTargetId(id); setShowDeleteConfirm(true); };
 
   const confirmDelete = async () => {
     if (!deleteTargetId) return;
-
     try {
+      setDeleting(true);
       const res = await api.delete<{ status: number; message: string }>(
-        `/teachers/${deleteTargetId}`,
-        { headers: { Authorization: `Bearer ${token()}` } },
+        `/teachers/${deleteTargetId}`, { headers: { Authorization: `Bearer ${token()}` } }
       );
-
       if (res.data.status === 1) {
-        setTeachers((prev) => prev.filter((t) => t.id !== deleteTargetId));
-        showToast(res.data.message || "Teacher deleted", "success");
-
-        if (selectedTeacher?.id === deleteTargetId) {
-          setShowViewModal(false);
-          setSelectedTeacher(null);
-        }
+        setTeachers((prev) => {
+          const updated = prev.filter((t) => t.id !== deleteTargetId);
+          const newLast = Math.max(1, Math.ceil(updated.length / PAGE_SIZE));
+          if (safePage > newLast) setCurrentPage(newLast);
+          return updated;
+        });
+        toast.success(res.data.message || "Teacher deleted");
+        if (selectedTeacher?.id === deleteTargetId) { setShowViewModal(false); setSelectedTeacher(null); }
       } else {
-        showToast(res.data.message || "Failed to delete teacher", "error");
+        toast.error(res.data.message || "Failed to delete teacher");
       }
     } catch (error: any) {
-      console.error("Delete error:", error);
-      showToast(
-        error.response?.data?.message || "Failed to delete teacher",
-        "error",
-      );
+      toast.error(error.response?.data?.message || "Failed to delete teacher");
     } finally {
-      setShowDeleteConfirm(false);
-      setDeleteTargetId(null);
+      setDeleting(false); setShowDeleteConfirm(false); setDeleteTargetId(null);
     }
   };
 
-  // OPEN ADD DRAWER
-  const openAddDrawer = () => {
-    setIsEditMode(false);
-    setEditTeacherId(null);
-    setForm(initialTeacherForm);
-    setShowAddDrawer(true);
-  };
-
-  // OPEN EDIT DRAWER
-  const openEditDrawer = (teacher: Teacher) => {
-    setIsEditMode(true);
-    setEditTeacherId(teacher.id);
-
+  // ── Drawer ────────────────────────────────────────────────────────────────
+  const openAddDrawer = () => { setIsEditMode(false); setEditTeacherId(null); setForm(initialForm); setShowAddDrawer(true); };
+  const openEditDrawer = (t: Teacher) => {
+    setIsEditMode(true); setEditTeacherId(t.id);
     setForm({
-      name: teacher.name ?? "",
-      universityEmail: teacher.universityEmail ?? "",
-      personalEmail: teacher.personalEmail ?? "",
-      phone: teacher.phone ?? "",
-      roleType: (teacher.roleType as any) ?? "",
-      expertise: teacher.expertise ?? "",
-      industryExperienceText: teacher.currentlyInIndustry ? "Yes" : "",
-      industryField: teacher.industryField ?? "",
-      active: !!teacher.activeThisTrimester,
+      name: t.name ?? "", universityEmail: t.universityEmail ?? "",
+      personalEmail: t.personalEmail ?? "", phone: t.phone ?? "",
+      roleType: (t.roleType as any) ?? "", expertise: t.expertise ?? "",
+      industryExperienceText: t.currentlyInIndustry ? "Yes" : "",
+      industryField: t.industryField ?? "", active: !!t.activeThisTrimester,
     });
-
     setShowAddDrawer(true);
   };
 
-  // SUBMIT (ADD/EDIT)
+  // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmitTeacher = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (submitting) return;
 
-    if (!form.name.trim()) return showToast("Full Name is required", "error");
-    if (!form.universityEmail.trim())
-      return showToast("University Email is required", "error");
-    if (!form.phone.trim()) return showToast("Phone is required", "error");
-    if (!form.roleType) return showToast("Role Type is required", "error");
-    if (!form.expertise.trim())
-      return showToast("Area of Expertise is required", "error");
+    if (!form.name.trim())              return toast.error("Full Name is required");
+    if (!form.universityEmail.trim())   return toast.error("University Email is required");
+    if (!form.phone.trim())             return toast.error("Phone is required");
+    if (!form.roleType)                 return toast.error("Role Type is required");
+    if (!form.expertise.trim())         return toast.error("Area of Expertise is required");
 
     const payload = {
-      full_name: form.name.trim(),
-      university_email: form.universityEmail.trim(),
-      personal_email: form.personalEmail.trim()
-        ? form.personalEmail.trim()
-        : null,
-      phone: form.phone.trim() ? form.phone.trim() : null,
-      area_of_expertise: form.expertise.trim() ? form.expertise.trim() : null,
-      industry_field: form.industryField.trim()
-        ? form.industryField.trim()
-        : null,
-      currently_working: !!form.industryExperienceText?.trim(),
+      full_name:            form.name.trim(),
+      university_email:     form.universityEmail.trim(),
+      personal_email:       form.personalEmail.trim()        || null,
+      phone:                form.phone.trim()                || null,
+      area_of_expertise:    form.expertise.trim()            || null,
+      industry_field:       form.industryField.trim()        || null,
+      currently_working:    !!form.industryExperienceText?.trim(),
       active_this_trimester: !!form.active,
-      role: mapRoleToApi(form.roleType),
+      role:   mapRoleToApi(form.roleType),
       status: "active",
     };
 
     try {
       setSubmitting(true);
-
       if (!isEditMode) {
-        const res = await api.post<TeacherResponse>("/teachers", payload, {
-          headers: { Authorization: `Bearer ${token()}` },
-        });
-
+        const res = await api.post<TeacherResponse>("/teachers", payload, { headers: { Authorization: `Bearer ${token()}` } });
         if (res.data.status === 1) {
-          const teacher = mapTeacherFromApi(res.data.data);
-          setTeachers((prev) => [teacher, ...prev]);
+          setTeachers((prev) => [mapTeacherFromApi(res.data.data), ...prev]);
+          setCurrentPage(1);
           setShowAddDrawer(false);
-          showToast("Teacher added successfully!", "success");
-          setForm(initialTeacherForm);
-        } else {
-          showToast(res.data.message || "Failed to add teacher", "error");
-        }
+          setForm(initialForm);
+          toast.success("Teacher added successfully!");
+        } else { toast.error(res.data.message || "Failed to add teacher"); }
       } else {
-        if (!editTeacherId)
-          return showToast("No teacher selected for edit", "error");
-
-        const res = await api.put<TeacherResponse>(
-          `/teachers/${editTeacherId}`,
-          payload,
-          {
-            headers: { Authorization: `Bearer ${token()}` },
-          },
-        );
-
+        if (!editTeacherId) return toast.error("No teacher selected for edit");
+        const res = await api.put<TeacherResponse>(`/teachers/${editTeacherId}`, payload, { headers: { Authorization: `Bearer ${token()}` } });
         if (res.data.status === 1) {
           const updated = mapTeacherFromApi(res.data.data);
-          setTeachers((prev) =>
-            prev.map((t) => (t.id === updated.id ? updated : t)),
-          );
-
+          setTeachers((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
           if (selectedTeacher?.id === updated.id) setSelectedTeacher(updated);
-
           setShowAddDrawer(false);
-          showToast("Teacher updated successfully!", "success");
-        } else {
-          showToast(res.data.message || "Failed to update teacher", "error");
-        }
+          toast.success("Teacher updated successfully!");
+        } else { toast.error(res.data.message || "Failed to update teacher"); }
       }
     } catch (error: any) {
       if (error.response?.status === 422) {
         const errors = error.response.data?.errors;
-        const firstError = errors
-          ? (Object.values(errors)[0] as string[])
-          : null;
-        showToast(firstError?.[0] || "Validation error", "error");
+        const firstError = errors ? (Object.values(errors)[0] as string[]) : null;
+        toast.error(firstError?.[0] || "Validation error");
         return;
       }
-      console.error("Submit error:", error);
-      showToast(error.response?.data?.message || "Submit failed", "error");
+      toast.error(error.response?.data?.message || "Submit failed");
     } finally {
       setSubmitting(false);
     }
   };
 
-  return (
-    <div className="space-y-4 sm:space-y-6">
-      {/* Toast Notifications */}
-      <div className="fixed top-4 right-4 z-[60] space-y-2">
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={`px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-fade-in ${
-              toast.type === "success"
-                ? "bg-green-50 border border-green-200 text-green-800"
-                : "bg-red-50 border border-red-200 text-red-800"
-            }`}
-          >
-            {toast.type === "success" ? (
-              <CheckCircle className="w-5 h-5 flex-shrink-0" />
-            ) : (
-              <XCircle className="w-5 h-5 flex-shrink-0" />
-            )}
-            <span>{toast.message}</span>
-          </div>
-        ))}
+  // ── Pagination bar (desktop) ──────────────────────────────────────────────
+  const PaginationBar = () =>
+    totalItems > 0 ? (
+      <div className="border-t border-light px-6 py-3 flex items-center justify-between flex-wrap gap-3">
+        <p className="text-sm text-body">
+          Showing <span className="font-medium text-dark">{fromItem}–{toItem}</span> of{" "}
+          <span className="font-medium text-dark">{totalItems}</span> teachers
+        </p>
+        <div className="flex items-center gap-1">
+          <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}
+            className="p-1.5 rounded-lg border border-light text-body hover:bg-soft active:bg-soft/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer">
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          {pageNumbers[0] > 1 && (<>
+            <button onClick={() => setCurrentPage(1)} className="w-8 h-8 rounded-lg border border-light text-sm text-body hover:bg-soft cursor-pointer">1</button>
+            {pageNumbers[0] > 2 && <span className="px-1 text-body text-sm">…</span>}
+          </>)}
+          {pageNumbers.map((page) => (
+            <button key={page} onClick={() => setCurrentPage(page)}
+              className={`w-8 h-8 rounded-lg border text-sm transition-colors cursor-pointer ${
+                page === safePage ? "bg-primary-blue text-white border-primary-blue font-medium" : "border-light text-body hover:bg-soft"
+              }`}>
+              {page}
+            </button>
+          ))}
+          {pageNumbers[pageNumbers.length - 1] < totalPages && (<>
+            {pageNumbers[pageNumbers.length - 1] < totalPages - 1 && <span className="px-1 text-body text-sm">…</span>}
+            <button onClick={() => setCurrentPage(totalPages)} className="w-8 h-8 rounded-lg border border-light text-sm text-body hover:bg-soft cursor-pointer">{totalPages}</button>
+          </>)}
+          <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}
+            className="p-1.5 rounded-lg border border-light text-body hover:bg-soft active:bg-soft/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer">
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
       </div>
+    ) : null;
 
+  // ── Render ────────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-5">
       {/* Header */}
       <div>
         <h1 className="text-primary-blue mb-2">Teacher Management</h1>
-        <p className="text-body">
-          Manage your teaching staff and their information
-        </p>
+        <p className="text-body">Manage your teaching staff and their information</p>
       </div>
 
-      {/* Filters Bar */}
-      <div className="bg-white rounded-xl shadow-card p-4 sm:p-6 border border-light">
-        <div className="flex flex-col gap-4">
+      {/* ── Compact filter bar ── */}
+      <div className="bg-white rounded-xl shadow-card p-4 border border-light">
+        <div className="flex flex-col sm:flex-row gap-3">
           {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              placeholder="Search by name or email..."
+              placeholder="Search by name or email…"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-11 pr-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
+              className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
             />
           </div>
 
-          {/* Filter Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-            <div className="relative">
-              <Award className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none z-10" />
-              <select
-                value={filterExpertise}
-                onChange={(e) => setFilterExpertise(e.target.value)}
-                className="w-full pl-11 pr-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent appearance-none bg-white"
-              >
-                <option value="">All Expertise</option>
-                {expertiseAreas.map((exp) => (
-                  <option key={exp} value={exp}>
-                    {exp}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Dropdowns in a row */}
+          <div className="flex gap-2 flex-wrap sm:flex-nowrap">
+            <select
+              value={filterRoleType}
+              onChange={(e) => setFilterRoleType(e.target.value)}
+              className="flex-1 min-w-[110px] px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white text-body cursor-pointer"
+            >
+              <option value="">All Roles</option>
+              <option value="Lecturer">Lecturer</option>
+              <option value="Marker">Marker</option>
+              <option value="Both">Both</option>
+            </select>
 
-            <div className="relative">
-              <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none z-10" />
-              <select
-                value={filterRoleType}
-                onChange={(e) => setFilterRoleType(e.target.value)}
-                className="w-full pl-11 pr-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent appearance-none bg-white"
-              >
-                <option value="">All Roles</option>
-                <option value="Lecturer">Lecturer</option>
-                <option value="Marker">Marker</option>
-                <option value="Both">Both</option>
-              </select>
-            </div>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="flex-1 min-w-[110px] px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white text-body cursor-pointer"
+            >
+              <option value="">All Status</option>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+              <option value="Industry Only">Industry</option>
+            </select>
 
-            <div className="relative">
-              <Circle className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none z-10" />
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="w-full pl-11 pr-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent appearance-none bg-white"
-              >
-                <option value="">All Status</option>
-                <option value="Active">Active</option>
-                <option value="Inactive">Inactive</option>
-                <option value="Industry Only">Industry Only</option>
-              </select>
-            </div>
-          </div>
+            <select
+              value={filterExpertise}
+              onChange={(e) => setFilterExpertise(e.target.value)}
+              className="flex-1 min-w-[120px] px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white text-body cursor-pointer"
+            >
+              <option value="">All Expertise</option>
+              {expertiseAreas.map((exp) => <option key={exp} value={exp}>{exp}</option>)}
+            </select>
 
-          {/* Add button and clear filters */}
-          <div className="flex items-center justify-between gap-2">
-            {(searchTerm ||
-              filterExpertise ||
-              filterRoleType ||
-              filterStatus) && (
+            {hasFilters && (
               <button
                 onClick={clearFilters}
-                className="flex items-center gap-2 text-sm text-primary-blue hover:text-sky-blue transition-colors"
+                title="Clear filters"
+                className="px-3 py-2.5 border border-gray-300 rounded-xl text-body hover:bg-soft active:bg-soft/80 transition-colors cursor-pointer flex items-center gap-1.5 text-sm whitespace-nowrap"
               >
-                <X className="w-5 h-5" />
-                Clear all filters
+                <X className="w-3.5 h-3.5" />
+                Clear
               </button>
             )}
 
             <button
               onClick={openAddDrawer}
-              className="ml-auto flex items-center gap-2 px-5 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity shadow-sm whitespace-nowrap"
+              className="flex items-center gap-2 px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 active:scale-[0.97] active:opacity-80 transition-all duration-150 shadow-sm whitespace-nowrap text-sm cursor-pointer select-none"
             >
-              <Plus className="w-5 h-5" />
+              <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Add Teacher</span>
               <span className="sm:hidden">Add</span>
             </button>
@@ -470,494 +426,319 @@ export default function TeacherManagement() {
         </div>
       </div>
 
-      {/* Desktop/Tablet Table View */}
+      {/* ── Desktop table ── */}
       <div className="hidden md:block bg-white rounded-xl shadow-card border border-light overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-soft sticky top-0">
               <tr>
-                <th className="px-6 py-4 text-left text-body">Teacher Name</th>
-                <th className="px-6 py-4 text-left text-body">Role</th>
-                <th className="px-6 py-4 text-left text-body">Status</th>
-                <th className="px-6 py-4 text-left text-body">Phone</th>
-                <th className="px-6 py-4 text-left text-body">Actions</th>
+                {["Teacher Name", "Role", "Status", "Phone", "Actions"].map((h) => (
+                  <th key={h} className="px-6 py-4 text-left text-body font-medium">{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {filteredTeachers.map((teacher, index) => (
-                <tr
-                  key={teacher.id}
-                  className={`border-t border-light hover:bg-soft transition-colors ${
-                    index % 2 === 0 ? "bg-white" : "bg-[#FAFAFA]"
-                  }`}
-                >
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-primary-blue rounded-full flex items-center justify-center text-white flex-shrink-0">
-                        {teacher.name
-                          .split(" ")
-                          .map((n) => n[0])
-                          .join("")
-                          .slice(0, 2)}
+              {loading ? (
+                Array.from({ length: 6 }).map((_, i) => <SkeletonRow key={i} />)
+              ) : (
+                paginatedTeachers.map((teacher, index) => (
+                  <tr
+                    key={teacher.id}
+                    className={`border-t border-light hover:bg-soft transition-colors ${index % 2 === 0 ? "bg-white" : "bg-[#FAFAFA]"}`}
+                  >
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 bg-primary-blue rounded-full flex items-center justify-center text-white text-sm font-semibold flex-shrink-0">
+                          {teacher.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+                        </div>
+                        <div>
+                          <p className="text-dark font-medium text-sm">{teacher.name}</p>
+                          <p className="text-xs text-body">{teacher.universityEmail}</p>
+                        </div>
                       </div>
-                      <span className="text-dark">{teacher.name}</span>
-                    </div>
-                  </td>
-
-                  <td className="px-6 py-4">
-                    {teacher.roleType === "Lecturer" && (
-                      <span className="inline-flex items-center px-3 py-1 bg-green-50 text-green-600 rounded-full text-sm">
-                        Lecturer
-                      </span>
-                    )}
-                    {teacher.roleType === "Marker" && (
-                      <span className="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm">
-                        Marker
-                      </span>
-                    )}
-                    {teacher.roleType === "Both" && (
-                      <span className="inline-flex items-center px-3 py-1 bg-green-50 text-green-600 rounded-full text-sm">
-                        Both
-                      </span>
-                    )}
-                    {!teacher.roleType && (
-                      <span className="inline-flex items-center px-3 py-1 bg-gray-100 text-gray-500 rounded-full text-sm">
-                        Not Set
-                      </span>
-                    )}
-                  </td>
-
-                  <td className="px-6 py-4">
-                    {teacher.activeThisTrimester ? (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-600 rounded-full text-sm">
-                        <CheckCircle className="w-4 h-4" />
-                        Active
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-gray-100 text-gray-500 rounded-full text-sm">
-                        <XCircle className="w-4 h-4" />
-                        Inactive
-                      </span>
-                    )}
-                  </td>
-
-                  <td className="px-6 py-4 text-body">{teacher.phone}</td>
-
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleViewTeacher(teacher)}
-                        className="p-2 text-primary-blue hover:bg-blue-50 rounded-lg transition-colors"
-                        title="View Details"
-                      >
-                        <Eye className="w-5 h-5" />
-                      </button>
-
-                      <button
-                        onClick={() => openEditDrawer(teacher)}
-                        className="p-2 text-sky-blue hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Edit"
-                      >
-                        <Edit className="w-5 h-5" />
-                      </button>
-
-                      <button
-                        onClick={() => handleDeleteClick(teacher.id)}
-                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="px-6 py-4"><RoleBadge role={teacher.roleType} /></td>
+                    <td className="px-6 py-4"><StatusBadge active={!!teacher.activeThisTrimester} /></td>
+                    <td className="px-6 py-4 text-body text-sm">{teacher.phone || "—"}</td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => handleViewTeacher(teacher)} title="View"
+                          className="p-1.5 text-primary-blue hover:bg-blue-50 active:bg-blue-100 active:scale-95 rounded-lg transition-all duration-100 cursor-pointer">
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => openEditDrawer(teacher)} title="Edit"
+                          className="p-1.5 text-sky-blue hover:bg-blue-50 active:bg-blue-100 active:scale-95 rounded-lg transition-all duration-100 cursor-pointer">
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => handleDeleteClick(teacher.id)} title="Delete"
+                          className="p-1.5 text-red-500 hover:bg-red-50 active:bg-red-100 active:scale-95 rounded-lg transition-all duration-100 cursor-pointer">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
 
-        {filteredTeachers.length === 0 && (
+        {!loading && filteredTeachers.length === 0 && (
           <div className="p-12 text-center">
+            <User className="w-12 h-12 text-gray-300 mx-auto mb-3" />
             <p className="text-body">No teachers found matching your filters</p>
           </div>
         )}
+
+        <PaginationBar />
       </div>
 
-      {/* Mobile Card View */}
+      {/* ── Mobile cards ── */}
       <div className="md:hidden space-y-3">
-        {filteredTeachers.map((teacher) => (
-          <div
-            key={teacher.id}
-            className="bg-white rounded-xl shadow-card border border-light p-4 hover:shadow-md transition-shadow"
-          >
-            <div className="flex items-start gap-3 mb-3">
-              <div className="w-12 h-12 bg-primary-blue rounded-full flex items-center justify-center text-white flex-shrink-0">
-                {teacher.name
-                  .split(" ")
-                  .map((n) => n[0])
-                  .join("")
-                  .slice(0, 2)}
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="bg-white rounded-xl shadow-card border border-light p-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-full bg-gray-200 animate-pulse flex-shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3.5 w-32 rounded bg-gray-200 animate-pulse" />
+                  <div className="flex gap-2">
+                    <div className="h-5 w-16 rounded-full bg-gray-200 animate-pulse" />
+                    <div className="h-5 w-14 rounded-full bg-gray-200 animate-pulse" />
+                  </div>
+                </div>
               </div>
-
-              <div className="flex-1 min-w-0">
-                <h3 className="text-dark mb-1 truncate">{teacher.name}</h3>
-
-                {teacher.activeThisTrimester ? (
-                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-50 text-green-600 rounded-full text-xs">
-                    <CheckCircle className="w-3 h-3" />
-                    Active
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-500 rounded-full text-xs">
-                    <XCircle className="w-3 h-3" />
-                    Inactive
-                  </span>
-                )}
+              <div className="h-8 rounded-lg bg-gray-200 animate-pulse" />
+            </div>
+          ))
+        ) : (
+          paginatedTeachers.map((teacher) => (
+            <div key={teacher.id} className="bg-white rounded-xl shadow-card border border-light p-4 hover:shadow-md transition-shadow">
+              <div className="flex items-start gap-3 mb-3">
+                <div className="w-11 h-11 bg-primary-blue rounded-full flex items-center justify-center text-white text-sm font-semibold flex-shrink-0">
+                  {teacher.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-dark font-medium mb-1 truncate">{teacher.name}</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <StatusBadge active={!!teacher.activeThisTrimester} />
+                    <RoleBadge role={teacher.roleType} />
+                  </div>
+                </div>
+              </div>
+              {teacher.phone && (
+                <div className="flex items-center gap-2 text-sm text-body mb-3">
+                  <Phone className="w-3.5 h-3.5 text-primary-blue flex-shrink-0" />
+                  <span>{teacher.phone}</span>
+                </div>
+              )}
+              <div className="flex items-center gap-2 pt-3 border-t border-light">
+                <button onClick={() => handleViewTeacher(teacher)}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-primary-blue hover:bg-blue-50 rounded-lg transition-colors text-sm cursor-pointer">
+                  <Eye className="w-3.5 h-3.5" />View
+                </button>
+                <button onClick={() => openEditDrawer(teacher)}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-sky-blue hover:bg-blue-50 rounded-lg transition-colors text-sm cursor-pointer">
+                  <Edit className="w-3.5 h-3.5" />Edit
+                </button>
+                <button onClick={() => handleDeleteClick(teacher.id)}
+                  className="flex items-center justify-center px-3 py-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
+          ))
+        )}
 
-            <div className="space-y-2 mb-3 text-sm">
-              <div className="flex items-center gap-2 text-body">
-                <Phone className="w-4 h-4 text-primary-blue flex-shrink-0" />
-                <span>{teacher.phone}</span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 pt-3 border-t border-light">
-              <button
-                onClick={() => handleViewTeacher(teacher)}
-                className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 text-primary-blue hover:bg-blue-50 rounded-lg transition-colors text-sm"
-              >
-                <Eye className="w-4 h-4" />
-                View
+        {/* Mobile pagination */}
+        {!loading && totalItems > 0 && (
+          <div className="bg-white rounded-xl shadow-card border border-light px-4 py-3 flex items-center justify-between gap-3">
+            <p className="text-sm text-body">{fromItem}–{toItem} of {totalItems}</p>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}
+                className="p-1.5 rounded-lg border border-light text-body hover:bg-soft disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+                <ChevronLeft className="w-4 h-4" />
               </button>
-
-              <button
-                onClick={() => openEditDrawer(teacher)}
-                className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 text-sky-blue hover:bg-blue-50 rounded-lg transition-colors text-sm"
-              >
-                <Edit className="w-4 h-4" />
-                Edit
-              </button>
-
-              <button
-                onClick={() => handleDeleteClick(teacher.id)}
-                className="flex items-center justify-center px-3 py-2.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
+              <span className="px-3 text-sm text-dark font-medium">{safePage} / {totalPages}</span>
+              <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}
+                className="p-1.5 rounded-lg border border-light text-body hover:bg-soft disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+                <ChevronRight className="w-4 h-4" />
               </button>
             </div>
           </div>
-        ))}
+        )}
 
-        {filteredTeachers.length === 0 && (
+        {!loading && filteredTeachers.length === 0 && (
           <div className="p-12 text-center bg-white rounded-xl shadow-card border border-light">
+            <User className="w-12 h-12 text-gray-300 mx-auto mb-3" />
             <p className="text-body">No teachers found matching your filters</p>
           </div>
         )}
       </div>
 
-      {/* Add/Edit Teacher Drawer */}
+      {/* ── Add/Edit Modal (centered, matching Programs/Trimesters) ── */}
       {showAddDrawer && (
         <>
-          <div
-            className="fixed inset-0 bg-white/30 backdrop-blur-sm z-50"
-            onClick={() => setShowAddDrawer(false)}
-          />
+          <div className="fixed inset-0 bg-white/40 backdrop-blur-sm z-50" onClick={() => setShowAddDrawer(false)} />
+          <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+              <div className="border-b border-light px-6 py-4 flex items-center justify-between sticky top-0 bg-white z-10">
+                <h2 className="text-primary-blue">{isEditMode ? "Edit Teacher" : "Add New Teacher"}</h2>
+                <button onClick={() => setShowAddDrawer(false)} className="p-2 hover:bg-soft active:bg-soft/80 rounded-lg transition-colors cursor-pointer">
+                  <X className="w-5 h-5 text-body" />
+                </button>
+              </div>
 
-          <div className="fixed right-0 top-0 h-full w-full sm:w-[500px] lg:w-[600px] bg-white z-50 shadow-2xl overflow-y-auto animate-fade-in">
-            <div className="sticky top-0 bg-white border-b border-light px-6 py-4 flex items-center justify-between z-10">
-              <h2 className="text-primary-blue">
-                {isEditMode ? "Edit Teacher" : "Add New Teacher"}
-              </h2>
+              <form onSubmit={handleSubmitTeacher} className="p-6 space-y-5">
+                <div>
+                  <label className="block text-sm text-body mb-2">Full Name *</label>
+                  <input type="text" required value={form.name}
+                    onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow"
+                    placeholder="Dr. Jane Smith" />
+                </div>
 
-              <button
-                onClick={() => setShowAddDrawer(false)}
-                className="p-2 hover:bg-soft rounded-lg transition-colors"
-              >
-                <X className="w-6 h-6 text-body" />
-              </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-body mb-2">University Email *</label>
+                    <input type="email" required value={form.universityEmail}
+                      onChange={(e) => setForm((p) => ({ ...p, universityEmail: e.target.value }))}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow"
+                      placeholder="jane@university.edu" />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-body mb-2">Personal Email</label>
+                    <input type="email" value={form.personalEmail}
+                      onChange={(e) => setForm((p) => ({ ...p, personalEmail: e.target.value }))}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow"
+                      placeholder="jane@email.com" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-body mb-2">Phone *</label>
+                    <input type="tel" required value={form.phone}
+                      onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow"
+                      placeholder="+1 (555) 123-4567" />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-body mb-2">Teacher Role Type *</label>
+                    <select required value={form.roleType}
+                      onChange={(e) => setForm((p) => ({ ...p, roleType: e.target.value as any }))}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow cursor-pointer">
+                      <option value="">Select Role Type</option>
+                      <option value="Lecturer">Lecturer (Teaches Subjects)</option>
+                      <option value="Marker">Marker (Grading Only)</option>
+                      <option value="Both">Both (Lecturer + Marker)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-body mb-2">Area of Expertise *</label>
+                  <input type="text" required value={form.expertise}
+                    onChange={(e) => setForm((p) => ({ ...p, expertise: e.target.value }))}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow"
+                    placeholder="Artificial Intelligence" />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-body mb-2">Industry Experience</label>
+                    <textarea rows={3} value={form.industryExperienceText}
+                      onChange={(e) => setForm((p) => ({ ...p, industryExperienceText: e.target.value }))}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow resize-none"
+                      placeholder="E.g., 5 years at Google as Senior AI Engineer…" />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-body mb-2">Industry Field / Specialisation</label>
+                    <input type="text" value={form.industryField}
+                      onChange={(e) => setForm((p) => ({ ...p, industryField: e.target.value }))}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent transition-shadow"
+                      placeholder="E.g., AI, Cloud, Cybersecurity" />
+                  </div>
+                </div>
+
+                <div className="p-4 bg-soft rounded-xl">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" checked={form.active}
+                      onChange={(e) => setForm((p) => ({ ...p, active: e.target.checked }))}
+                      className="w-5 h-5 text-primary-blue rounded focus:ring-primary-blue border-gray-300" />
+                    <span className="text-body text-sm">Active This Trimester</span>
+                  </label>
+                </div>
+
+                <div className="flex gap-4 pt-2">
+                  <button type="submit" disabled={submitting}
+                    className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150 font-medium shadow-sm cursor-pointer">
+                    {submitting
+                      ? <span className="inline-flex items-center gap-2 justify-center"><Loader2 className="w-4 h-4 animate-spin" />Saving…</span>
+                      : isEditMode ? "Update Teacher" : "Add Teacher"
+                    }
+                  </button>
+                  <button type="button" onClick={() => setShowAddDrawer(false)}
+                    className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer">
+                    Cancel
+                  </button>
+                </div>
+              </form>
             </div>
-
-            <form onSubmit={handleSubmitTeacher} className="p-6 space-y-5">
-              <div>
-                <label className="block text-sm text-body mb-2">
-                  Full Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={form.name}
-                  onChange={(e) =>
-                    setForm((p) => ({ ...p, name: e.target.value }))
-                  }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
-                  placeholder="Dr. Jane Smith"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div>
-                  <label className="block text-sm text-body mb-2">
-                    University Email *
-                  </label>
-                  <input
-                    type="email"
-                    required
-                    value={form.universityEmail}
-                    onChange={(e) =>
-                      setForm((p) => ({
-                        ...p,
-                        universityEmail: e.target.value,
-                      }))
-                    }
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
-                    placeholder="jane@university.edu"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-body mb-2">
-                    Personal Email
-                  </label>
-                  <input
-                    type="email"
-                    value={form.personalEmail}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, personalEmail: e.target.value }))
-                    }
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
-                    placeholder="jane@email.com"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                <div>
-                  <label className="block text-sm text-body mb-2">
-                    Phone *
-                  </label>
-                  <input
-                    type="tel"
-                    required
-                    value={form.phone}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, phone: e.target.value }))
-                    }
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
-                    placeholder="+1 (555) 123-4567"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm text-body mb-2">
-                  Teacher Role Type *
-                </label>
-                <select
-                  required
-                  value={form.roleType}
-                  onChange={(e) =>
-                    setForm((p) => ({
-                      ...p,
-                      roleType: e.target.value as any,
-                    }))
-                  }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
-                >
-                  <option value="">Select Role Type</option>
-                  <option value="Lecturer">Lecturer (Teaches Subjects)</option>
-                  <option value="Marker">
-                    Marker (Paper / Assignment Marker Only)
-                  </option>
-                  <option value="Both">Both (Lecturer + Marker)</option>
-                </select>
-                <p className="text-xs text-gray-500 mt-2">
-                  Lecturer appears in class timetable, Marker is for grading
-                  only, Both does teaching and marking.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm text-body mb-2">
-                  Area of Expertise *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={form.expertise}
-                  onChange={(e) =>
-                    setForm((p) => ({ ...p, expertise: e.target.value }))
-                  }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
-                  placeholder="Artificial Intelligence"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-body mb-2">
-                  Industry Experience / Currently Working in Industry
-                </label>
-                <textarea
-                  rows={3}
-                  value={form.industryExperienceText}
-                  onChange={(e) =>
-                    setForm((p) => ({
-                      ...p,
-                      industryExperienceText: e.target.value,
-                    }))
-                  }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent resize-none"
-                  placeholder="E.g., 5 years at Google as Senior AI Engineer..."
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-body mb-2">
-                  Industry Field / Specialisation
-                </label>
-                <input
-                  type="text"
-                  value={form.industryField}
-                  onChange={(e) =>
-                    setForm((p) => ({ ...p, industryField: e.target.value }))
-                  }
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent"
-                  placeholder="E.g., AI, Cloud, Cybersecurity"
-                />
-              </div>
-
-              <div className="flex flex-col gap-3 p-4 bg-soft rounded-xl">
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.active}
-                    onChange={(e) =>
-                      setForm((p) => ({ ...p, active: e.target.checked }))
-                    }
-                    className="w-5 h-5 text-primary-blue rounded focus:ring-primary-blue border-gray-300"
-                  />
-                  <span className="text-body">Active This Trimester</span>
-                </label>
-              </div>
-
-              <div className="flex gap-3 pt-4">
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity shadow-sm disabled:opacity-60"
-                >
-                  {submitting
-                    ? "Saving..."
-                    : isEditMode
-                      ? "Update Teacher"
-                      : "Add Teacher"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowAddDrawer(false)}
-                  className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
           </div>
         </>
       )}
 
-      {/* View Teacher Modal (Subjects & schedule removed) */}
+      {/* ── View modal ── */}
       {showViewModal && selectedTeacher && (
         <>
-          <div
-            className="fixed inset-0 bg-white/30 backdrop-blur-sm z-50"
-            onClick={() => setShowViewModal(false)}
-          />
-
+          <div className="fixed inset-0 bg-white/30 backdrop-blur-sm z-50" onClick={() => setShowViewModal(false)} />
           <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-3xl w-full shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="bg-white rounded-xl max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto">
               <div className="border-b border-light px-6 py-4 flex items-center justify-between sticky top-0 bg-white z-10">
                 <h2 className="text-primary-blue">Teacher Details</h2>
-                <button
-                  onClick={() => setShowViewModal(false)}
-                  className="p-2 hover:bg-soft rounded-lg transition-colors"
-                >
-                  <X className="w-6 h-6 text-body" />
+                <button onClick={() => setShowViewModal(false)} className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer">
+                  <X className="w-5 h-5 text-body" />
                 </button>
               </div>
-
-              <div className="p-6 space-y-6">
-                <div className="flex items-start gap-4 pb-6 border-b border-light">
-                  <div className="w-20 h-20 bg-primary-blue rounded-full flex items-center justify-center text-white text-2xl flex-shrink-0">
-                    {selectedTeacher.name
-                      .split(" ")
-                      .map((n) => n[0])
-                      .join("")
-                      .slice(0, 2)}
+              <div className="p-6 space-y-5">
+                {/* Profile */}
+                <div className="flex items-start gap-4 pb-5 border-b border-light">
+                  <div className="w-16 h-16 bg-primary-blue rounded-full flex items-center justify-center text-white text-xl font-semibold flex-shrink-0">
+                    {selectedTeacher.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
                   </div>
-
                   <div className="flex-1">
-                    <h3 className="text-dark mb-1">{selectedTeacher.name}</h3>
-
+                    <h3 className="text-dark font-semibold text-lg mb-0.5">{selectedTeacher.name}</h3>
                     {selectedTeacher.roleType && (
-                      <p className="text-sm text-gray-500 mb-3">
-                        Role:{" "}
-                        <span className="font-medium">
-                          {selectedTeacher.roleType}
-                        </span>
-                      </p>
+                      <p className="text-sm text-body mb-2">Role: <span className="font-medium text-dark">{selectedTeacher.roleType}</span></p>
                     )}
-
-                    <div className="mt-2">
-                      {selectedTeacher.activeThisTrimester ? (
-                        <span className="inline-flex items-center gap-1.5 px-4 py-2 bg-green-50 text-green-600 rounded-full text-sm">
-                          <CheckCircle className="w-4 h-4" />
-                          Active
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 px-4 py-2 bg-gray-100 text-gray-500 rounded-full text-sm">
-                          <XCircle className="w-4 h-4" />
-                          Inactive
-                        </span>
-                      )}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <StatusBadge active={!!selectedTeacher.activeThisTrimester} />
+                      <RoleBadge role={selectedTeacher.roleType} />
                     </div>
                   </div>
                 </div>
 
                 {/* Contact */}
                 <div>
-                  <h4 className="text-dark mb-3 flex items-center gap-2">
-                    <Mail className="w-5 h-5 text-primary-blue" />
-                    Contact Information
+                  <h4 className="text-dark font-medium mb-3 flex items-center gap-2 text-sm">
+                    <Mail className="w-4 h-4 text-primary-blue" />Contact Information
                   </h4>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 bg-soft rounded-xl border border-light">
-                      <label className="text-xs text-body mb-1 block">
-                        University Email
-                      </label>
-                      <p className="text-dark">
-                        {selectedTeacher.universityEmail}
-                      </p>
-                    </div>
-
-                    <div className="p-4 bg-soft rounded-xl border border-light">
-                      <label className="text-xs text-body mb-1 block">
-                        Personal Email
-                      </label>
-                      <p className="text-dark">
-                        {selectedTeacher.personalEmail}
-                      </p>
-                    </div>
-
-                    <div className="p-4 bg-soft rounded-xl border border-light">
-                      <label className="text-xs text-body mb-1 block">
-                        Phone Number
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <Phone className="w-4 h-4 text-primary-blue" />
-                        <p className="text-dark">{selectedTeacher.phone}</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {[
+                      { label: "University Email", value: selectedTeacher.universityEmail },
+                      { label: "Personal Email",   value: selectedTeacher.personalEmail || "—" },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="p-3 bg-soft rounded-lg border border-light">
+                        <p className="text-xs text-body mb-0.5">{label}</p>
+                        <p className="text-dark text-sm">{value}</p>
+                      </div>
+                    ))}
+                    <div className="p-3 bg-soft rounded-lg border border-light">
+                      <p className="text-xs text-body mb-0.5">Phone Number</p>
+                      <div className="flex items-center gap-1.5">
+                        <Phone className="w-3.5 h-3.5 text-primary-blue" />
+                        <p className="text-dark text-sm">{selectedTeacher.phone || "—"}</p>
                       </div>
                     </div>
                   </div>
@@ -966,16 +747,13 @@ export default function TeacherManagement() {
                 {/* Industry */}
                 {selectedTeacher.currentlyInIndustry && (
                   <div>
-                    <h4 className="text-dark mb-3 flex items-center gap-2">
-                      <Briefcase className="w-5 h-5 text-primary-blue" />
-                      Industry Experience
+                    <h4 className="text-dark font-medium mb-3 flex items-center gap-2 text-sm">
+                      <Briefcase className="w-4 h-4 text-primary-blue" />Industry Experience
                     </h4>
                     <div className="p-4 bg-purple-50 rounded-xl border border-purple-200">
-                      <p className="text-body mb-2">
-                        Currently working in industry.
-                      </p>
+                      <p className="text-body text-sm mb-2">Currently working in industry.</p>
                       {selectedTeacher.industryField && (
-                        <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm">
+                        <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
                           {selectedTeacher.industryField}
                         </span>
                       )}
@@ -985,39 +763,27 @@ export default function TeacherManagement() {
 
                 {/* Expertise */}
                 <div>
-                  <h4 className="text-dark mb-3 flex items-center gap-2">
-                    <Award className="w-5 h-5 text-primary-blue" />
-                    Expertise
+                  <h4 className="text-dark font-medium mb-3 flex items-center gap-2 text-sm">
+                    <Award className="w-4 h-4 text-primary-blue" />Expertise
                   </h4>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="px-4 py-2 bg-blue-50 text-primary-blue rounded-full">
-                      {selectedTeacher.expertise}
-                    </span>
-                  </div>
+                  <span className="px-3 py-1.5 bg-blue-50 text-primary-blue rounded-full text-sm">
+                    {selectedTeacher.expertise}
+                  </span>
                 </div>
 
-                {/* Action Buttons */}
+                {/* Actions */}
                 <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-light">
                   <button
-                    onClick={() => {
-                      setShowViewModal(false);
-                      openEditDrawer(selectedTeacher);
-                    }}
-                    className="flex-1 px-4 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2"
+                    onClick={() => { setShowViewModal(false); openEditDrawer(selectedTeacher); }}
+                    className="flex-1 px-4 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] transition-all duration-150 flex items-center justify-center gap-2 font-medium cursor-pointer"
                   >
-                    <Edit className="w-5 h-5" />
-                    Edit Teacher
+                    <Edit className="w-4 h-4" />Edit Teacher
                   </button>
-
                   <button
-                    onClick={() => {
-                      setShowViewModal(false);
-                      handleDeleteClick(selectedTeacher.id);
-                    }}
-                    className="flex-1 px-4 py-3 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors flex items-center justify-center gap-2"
+                    onClick={() => { setShowViewModal(false); handleDeleteClick(selectedTeacher.id); }}
+                    className="flex-1 px-4 py-3 bg-red-500 text-white rounded-xl hover:bg-red-600 active:bg-red-700 active:scale-[0.98] transition-all duration-150 flex items-center justify-center gap-2 font-medium cursor-pointer"
                   >
-                    <Trash2 className="w-5 h-5" />
-                    Delete Teacher
+                    <Trash2 className="w-4 h-4" />Delete
                   </button>
                 </div>
               </div>
@@ -1026,33 +792,30 @@ export default function TeacherManagement() {
         </>
       )}
 
-      {/* Delete Confirmation Modal */}
+      {/* ── Delete confirmation ── */}
       {showDeleteConfirm && (
         <>
-          <div
-            className="fixed inset-0 bg-white/30 backdrop-blur-sm z-50"
-            onClick={() => setShowDeleteConfirm(false)}
-          />
-
+          <div className="fixed inset-0 bg-white/30 backdrop-blur-sm z-50" onClick={() => setShowDeleteConfirm(false)} />
           <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl max-w-md w-full shadow-2xl">
               <div className="p-6">
-                <h3 className="text-dark mb-2">Confirm Deletion</h3>
-                <p className="text-body mb-6">
-                  Are you sure you want to delete this teacher? This action
-                  cannot be undone.
+                <div className="w-12 h-12 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Trash2 className="w-6 h-6 text-red-500" />
+                </div>
+                <h3 className="text-dark font-semibold text-center mb-2">Confirm Deletion</h3>
+                <p className="text-body text-sm text-center mb-6">
+                  Are you sure you want to delete this teacher? This action cannot be undone.
                 </p>
                 <div className="flex gap-3">
-                  <button
-                    onClick={confirmDelete}
-                    className="flex-1 px-4 py-3 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors"
-                  >
-                    Delete
+                  <button onClick={confirmDelete} disabled={deleting}
+                    className="flex-1 px-4 py-3 bg-red-500 text-white rounded-xl hover:bg-red-600 active:bg-red-700 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150 font-medium cursor-pointer">
+                    {deleting
+                      ? <span className="inline-flex items-center gap-2 justify-center"><Loader2 className="w-4 h-4 animate-spin" />Deleting…</span>
+                      : "Delete"
+                    }
                   </button>
-                  <button
-                    onClick={() => setShowDeleteConfirm(false)}
-                    className="flex-1 px-4 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 transition-colors"
-                  >
+                  <button onClick={() => setShowDeleteConfirm(false)}
+                    className="flex-1 px-4 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer">
                     Cancel
                   </button>
                 </div>

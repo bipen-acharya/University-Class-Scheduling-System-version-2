@@ -1,628 +1,518 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../../api/axios";
+import { toast } from "sonner";
 import {
-  Calendar,
-  Plus,
-  Search,
-  Eye,
-  Edit2,
-  X,
-  CheckCircle,
-  XCircle,
-  Clock,
-  Building2,
-  Users,
-  ChevronLeft,
-  ChevronRight,
-  CalendarDays,
-  AlertCircle,
+  Calendar, Plus, Search, Eye, Edit2, X,
+  CheckCircle, XCircle, Clock, Building2, Users,
+  ChevronLeft, ChevronRight, CalendarDays, AlertCircle,
 } from "lucide-react";
 import MultipleBookingsModal from "./MultipleBookingsModal";
 
-/** =========================
- * API types (matches your backend response)
- * ========================= */
+/** ========================= Types ========================= */
 type BookingStatus = "pending" | "approved" | "rejected";
-type EventType = "workshop" | "bootcamp" | "meeting" | "external" | "other";
+type EventType     = "workshop" | "bootcamp" | "meeting" | "external" | "other";
 type Notifications = "all-staff" | "selected-staff" | "none";
 
 type RoomApi = {
-  id: number;
-  room_name: string;
+  id: number; room_name: string;
   room_type: "lecture_hall" | "lab" | "seminar_room";
-  capacity: number;
-  department?: string | null;
+  capacity: number; department?: string | null;
 };
 
 type StaffApi = { id: number; name: string; email: string };
 
 type RommBookingApi = {
-  id: number;
-  event_name: string;
-  event_type: EventType;
-  room_id: number;
-  room?: RoomApi | null;
-
-  booking_date: string; // e.g. "2026-02-15T00:00:00.000000Z"
-  start_time: string; // e.g. "2026-02-11T09:00:00.000000Z" OR "09:00:00" OR "09:00"
-  end_time: string;
-
-  organiser_name: string;
-  organiser_email?: string | null;
-
-  status: BookingStatus;
-  notifications: Notifications;
-
-  description?: string | null;
-  capacity_needed?: number | null;
-  notes?: string | null;
-  email_message?: string | null;
-
-  equipment?: string[];
-  staff?: StaffApi[];
-
-  created_by?: number | null;
-  approved_by?: number | null;
-
-  created_at?: string;
-  updated_at?: string;
+  id: number; event_name: string; event_type: EventType;
+  room_id: number; room?: RoomApi | null;
+  booking_date: string; start_time: string; end_time: string;
+  organiser_name: string; organiser_email?: string | null;
+  status: BookingStatus; notifications: Notifications;
+  description?: string | null; capacity_needed?: number | null;
+  notes?: string | null; email_message?: string | null;
+  equipment?: string[]; staff?: StaffApi[];
+  created_by?: number | null; approved_by?: number | null;
+  created_at?: string; updated_at?: string;
 };
 
-type ApiListResponse<T> = { status: number; message: string; data: T[] };
+type ApiListResponse<T>   = { status: number; message: string; data: T[] };
 type ApiSingleResponse<T> = { status: number; message: string; data: T };
 
-/** =========================
- * UI type (keeps your component design)
- * ========================= */
 interface RoomBooking {
-  id: string;
-  eventName: string;
-  eventType: EventType;
-  room: string;
-  date: Date;
-  startTime: string;
-  endTime: string;
-  organiser: string;
-
-  // keep department in UI (derive from room.department if you want)
-  department: string;
-
-  status: BookingStatus;
-  notifications: Notifications;
-
-  selectedStaff?: string[];
-  description?: string;
-  capacityNeeded?: number;
-  equipment?: string[];
-  notes?: string;
-  emailMessage?: string;
-
-  // extra for dynamic detail
-  roomObj?: RoomApi | null;
-  staff?: StaffApi[];
-  organiserEmail?: string;
+  id: string; eventName: string; eventType: EventType;
+  room: string; date: Date; startTime: string; endTime: string;
+  organiser: string; department: string; status: BookingStatus;
+  notifications: Notifications; selectedStaff?: string[];
+  description?: string; capacityNeeded?: number;
+  equipment?: string[]; notes?: string; emailMessage?: string;
+  roomObj?: RoomApi | null; staff?: StaffApi[]; organiserEmail?: string;
 }
 
-const eventTypeColors: Record<
-  EventType,
-  { bg: string; text: string; border: string }
-> = {
-  workshop: { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
+const eventTypeColors: Record<EventType, { bg: string; text: string; border: string }> = {
+  workshop: { bg: "bg-blue-50",   text: "text-blue-700",   border: "border-blue-200" },
   bootcamp: { bg: "bg-purple-50", text: "text-purple-700", border: "border-purple-200" },
-  meeting: { bg: "bg-green-50", text: "text-green-700", border: "border-green-200" },
+  meeting:  { bg: "bg-green-50",  text: "text-green-700",  border: "border-green-200" },
   external: { bg: "bg-orange-50", text: "text-orange-700", border: "border-orange-200" },
-  other: { bg: "bg-gray-50", text: "text-gray-700", border: "border-gray-200" },
+  other:    { bg: "bg-gray-50",   text: "text-gray-700",   border: "border-gray-200" },
 };
 
-const statusColors: Record<
-  BookingStatus,
-  { bg: string; text: string; border: string }
-> = {
-  pending: { bg: "bg-yellow-50", text: "text-yellow-700", border: "border-yellow-200" },
-  approved: { bg: "bg-green-50", text: "text-green-700", border: "border-green-200" },
-  rejected: { bg: "bg-red-50", text: "text-red-700", border: "border-red-200" },
+const statusColors: Record<BookingStatus, { bg: string; text: string; border: string }> = {
+  pending:  { bg: "bg-yellow-50", text: "text-yellow-700", border: "border-yellow-200" },
+  approved: { bg: "bg-green-50",  text: "text-green-700",  border: "border-green-200" },
+  rejected: { bg: "bg-red-50",    text: "text-red-700",    border: "border-red-200" },
 };
 
-/** =========================
- * Helpers
- * ========================= */
-function dateFromApi(value: string): Date {
-  // "2026-02-15" OR "2026-02-15T00:00:00.000000Z"
-  return new Date(value);
-}
+/** ========================= Helpers ========================= */
+function dateFromApi(value: string): Date { return new Date(value); }
 
 function timeFromApi(value: string): string {
   if (!value) return "";
-  // ISO datetime
   if (value.includes("T")) {
     const d = new Date(value);
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${hh}:${mm}`;
+    return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
   }
-  // "09:00:00" -> "09:00"
   return value.slice(0, 5);
 }
 
 function mapApiToUi(b: RommBookingApi): RoomBooking {
-  const roomName = b.room?.room_name ?? `Room #${b.room_id}`;
-  const dept = b.room?.department ?? "—";
-
   return {
-    id: String(b.id),
-    eventName: b.event_name,
-    eventType: b.event_type,
-    room: roomName,
+    id: String(b.id), eventName: b.event_name, eventType: b.event_type,
+    room: b.room?.room_name ?? `Room #${b.room_id}`,
     date: dateFromApi(b.booking_date),
-    startTime: timeFromApi(b.start_time),
-    endTime: timeFromApi(b.end_time),
-    organiser: b.organiser_name,
-    organiserEmail: b.organiser_email ?? undefined,
-    department: dept,
-    status: b.status,
-    notifications: b.notifications,
-    description: b.description ?? undefined,
+    startTime: timeFromApi(b.start_time), endTime: timeFromApi(b.end_time),
+    organiser: b.organiser_name, organiserEmail: b.organiser_email ?? undefined,
+    department: b.room?.department ?? "—", status: b.status,
+    notifications: b.notifications, description: b.description ?? undefined,
     capacityNeeded: b.capacity_needed ?? undefined,
-    equipment: b.equipment ?? [],
-    notes: b.notes ?? undefined,
-    emailMessage: b.email_message ?? undefined,
-    roomObj: b.room ?? null,
-    staff: b.staff ?? [],
-    selectedStaff: (b.staff ?? []).map((u) => u.name),
+    equipment: b.equipment ?? [], notes: b.notes ?? undefined,
+    emailMessage: b.email_message ?? undefined, roomObj: b.room ?? null,
+    staff: b.staff ?? [], selectedStaff: (b.staff ?? []).map((u) => u.name),
   };
 }
 
 type BookingPayload = {
-  event_name: string;
-  event_type: EventType;
-  room_id: number;
-  booking_date: string; // YYYY-MM-DD
-  start_time: string; // HH:mm
-  end_time: string; // HH:mm
-  organiser_name: string;
-  organiser_email?: string;
-  notifications: Notifications;
-  description?: string;
-  capacity_needed?: number;
-  notes?: string;
-  email_message?: string;
-  equipment?: string[];
-  staff_ids?: number[];
+  event_name: string; event_type: EventType; room_id: number;
+  booking_date: string; start_time: string; end_time: string;
+  organiser_name: string; organiser_email?: string; notifications: Notifications;
+  description?: string; capacity_needed?: number; notes?: string;
+  email_message?: string; equipment?: string[]; staff_ids?: number[];
 };
 
-/** Parse backend errors like:
- * { status: 0, message: "..." }
- * or Laravel 422 { message, errors: { field: [..] } }
- */
 function parseApiError(err: any): string {
   const msg = err?.response?.data?.message;
   const errors = err?.response?.data?.errors;
   if (errors && typeof errors === "object") {
     const firstKey = Object.keys(errors)[0];
-    const firstMsg = errors[firstKey]?.[0];
-    return firstMsg || msg || "Request failed.";
+    return errors[firstKey]?.[0] || msg || "Request failed.";
   }
   return msg || err?.message || "Request failed.";
 }
 
-/** =========================
- * Component
- * ========================= */
+const PAGE_SIZE = 10;
+
+/** ========================= Skeleton row ========================= */
+function SkeletonRow() {
+  return (
+    <tr className="border-t border-light">
+      <td className="px-5 py-4">
+        <div className="h-3.5 w-32 rounded bg-gray-200 animate-pulse mb-1" />
+        <div className="h-3 w-20 rounded bg-gray-200 animate-pulse" />
+      </td>
+      <td className="px-5 py-4"><div className="h-6 w-20 rounded-lg bg-gray-200 animate-pulse" /></td>
+      <td className="px-5 py-4"><div className="h-4 w-24 rounded bg-gray-200 animate-pulse" /></td>
+      <td className="px-5 py-4"><div className="h-4 w-24 rounded bg-gray-200 animate-pulse" /></td>
+      <td className="px-5 py-4"><div className="h-4 w-24 rounded bg-gray-200 animate-pulse" /></td>
+      <td className="px-5 py-4"><div className="h-4 w-24 rounded bg-gray-200 animate-pulse" /></td>
+      <td className="px-5 py-4"><div className="h-6 w-20 rounded-lg bg-gray-200 animate-pulse" /></td>
+      <td className="px-5 py-4"><div className="h-4 w-16 rounded bg-gray-200 animate-pulse" /></td>
+      <td className="px-5 py-4">
+        <div className="flex gap-1.5">
+          <div className="w-7 h-7 rounded-lg bg-gray-200 animate-pulse" />
+          <div className="w-7 h-7 rounded-lg bg-gray-200 animate-pulse" />
+          <div className="w-7 h-7 rounded-lg bg-gray-200 animate-pulse" />
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/** ========================= Pagination Bar ========================= */
+function PaginationBar({
+  currentPage, totalPages, totalItems, onPageChange,
+}: {
+  currentPage: number; totalPages: number;
+  totalItems: number; onPageChange: (page: number) => void;
+}) {
+  const safePage = Math.min(currentPage, totalPages);
+  const fromItem = totalItems === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
+  const toItem   = Math.min(safePage * PAGE_SIZE, totalItems);
+
+  const pageNumbers = useMemo(() => {
+    const range: number[] = [];
+    for (let i = Math.max(1, safePage - 2); i <= Math.min(totalPages, safePage + 2); i++) range.push(i);
+    return range;
+  }, [safePage, totalPages]);
+
+  if (totalItems === 0) return null;
+
+  return (
+    <div className="border-t border-light px-6 py-3 flex items-center justify-between flex-wrap gap-3">
+      <p className="text-sm text-body">
+        Showing <span className="font-medium text-dark">{fromItem}–{toItem}</span> of{" "}
+        <span className="font-medium text-dark">{totalItems}</span> bookings
+      </p>
+      <div className="flex items-center gap-1">
+        <button onClick={() => onPageChange(Math.max(1, safePage - 1))} disabled={safePage === 1}
+          className="p-1.5 rounded-lg border border-light text-body hover:bg-soft active:bg-soft/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer">
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        {pageNumbers[0] > 1 && (<>
+          <button onClick={() => onPageChange(1)} className="w-8 h-8 rounded-lg border border-light text-sm text-body hover:bg-soft cursor-pointer">1</button>
+          {pageNumbers[0] > 2 && <span className="px-1 text-body text-sm">…</span>}
+        </>)}
+        {pageNumbers.map((page) => (
+          <button key={page} onClick={() => onPageChange(page)}
+            className={`w-8 h-8 rounded-lg border text-sm transition-colors cursor-pointer ${
+              page === safePage ? "bg-primary-blue text-white border-primary-blue font-medium" : "border-light text-body hover:bg-soft"
+            }`}>
+            {page}
+          </button>
+        ))}
+        {pageNumbers[pageNumbers.length - 1] < totalPages && (<>
+          {pageNumbers[pageNumbers.length - 1] < totalPages - 1 && <span className="px-1 text-body text-sm">…</span>}
+          <button onClick={() => onPageChange(totalPages)} className="w-8 h-8 rounded-lg border border-light text-sm text-body hover:bg-soft cursor-pointer">{totalPages}</button>
+        </>)}
+        <button onClick={() => onPageChange(Math.min(totalPages, safePage + 1))} disabled={safePage === totalPages}
+          className="p-1.5 rounded-lg border border-light text-body hover:bg-soft active:bg-soft/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer">
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** ========================= Main Component ========================= */
 export default function RoomBookings() {
   const token = useMemo(() => localStorage.getItem("token"), []);
 
-  // ✅ dynamic states
-  const [bookings, setBookings] = useState<RoomBooking[]>([]);
-  const [rooms, setRooms] = useState<RoomApi[]>([]);
+  const [bookings,       setBookings]       = useState<RoomBooking[]>([]);
+  const [rooms,          setRooms]          = useState<RoomApi[]>([]);
+  const [loadingBookings, setLoadingBookings] = useState(true);
+  const [loadingRooms,   setLoadingRooms]   = useState(true);
 
-  // UI states
-  const [viewMode, setViewMode] = useState<"table" | "calendar">("table");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterRoom, setFilterRoom] = useState("all");
-  const [filterEventType, setFilterEventType] = useState("all");
-  const [filterStatus, setFilterStatus] = useState("all");
+  const [viewMode,         setViewMode]         = useState<"table" | "calendar">("table");
+  const [searchQuery,      setSearchQuery]      = useState("");
+  const [filterRoom,       setFilterRoom]       = useState("all");
+  const [filterEventType,  setFilterEventType]  = useState("all");
+  const [filterStatus,     setFilterStatus]     = useState("all");
 
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
-  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
-  const [editingBooking, setEditingBooking] = useState<RoomBooking | null>(null);
-  const [selectedBooking, setSelectedBooking] = useState<RoomBooking | null>(null);
+  const [isDetailModalOpen,  setIsDetailModalOpen]  = useState(false);
+  const [editingBooking,     setEditingBooking]     = useState<RoomBooking | null>(null);
+  const [selectedBooking,    setSelectedBooking]    = useState<RoomBooking | null>(null);
+  const [modalError,         setModalError]         = useState("");
+  const [currentPage,        setCurrentPage]        = useState(1);
 
-  const [loadingBookings, setLoadingBookings] = useState(false);
-  const [loadingRooms, setLoadingRooms] = useState(false);
+  useEffect(() => { setCurrentPage(1); }, [searchQuery, filterRoom, filterEventType, filterStatus]);
 
-  // page message
-  const [pageError, setPageError] = useState("");
-  const [pageSuccess, setPageSuccess] = useState("");
-
-  // modal message (to show overlap error etc)
-  const [modalError, setModalError] = useState("");
-
-  /** =========================
-   * Fetch Rooms + Bookings
-   * ========================= */
+  /** ── Fetchers ── */
   const fetchRooms = async () => {
-    setLoadingRooms(true);
-    setPageError("");
     try {
-      // change endpoint if yours differs
-      const res = await api.get<ApiListResponse<RoomApi>>("/rooms", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
+      setLoadingRooms(true);
+      const res = await api.get<ApiListResponse<RoomApi>>("/rooms", { headers: { Authorization: `Bearer ${token}` } });
       if (res.data.status === 1) setRooms(res.data.data || []);
-      else setPageError(res.data.message || "Failed to load rooms.");
-    } catch (err: any) {
-      setPageError(parseApiError(err));
-    } finally {
-      setLoadingRooms(false);
-    }
+      else toast.error(res.data.message || "Failed to load rooms.");
+    } catch (err: any) { toast.error(parseApiError(err)); }
+    finally { setLoadingRooms(false); }
   };
 
   const fetchBookings = async () => {
-    setLoadingBookings(true);
-    setPageError("");
     try {
-      const res = await api.get<ApiListResponse<RommBookingApi>>("/room-bookings", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
+      setLoadingBookings(true);
+      const res = await api.get<ApiListResponse<RommBookingApi>>("/room-bookings", { headers: { Authorization: `Bearer ${token}` } });
       if (res.data.status === 1) setBookings((res.data.data || []).map(mapApiToUi));
-      else setPageError(res.data.message || "Failed to load bookings.");
-    } catch (err: any) {
-      setPageError(parseApiError(err));
-    } finally {
-      setLoadingBookings(false);
-    }
+      else toast.error(res.data.message || "Failed to load bookings.");
+    } catch (err: any) { toast.error(parseApiError(err)); }
+    finally { setLoadingBookings(false); }
   };
 
-  useEffect(() => {
-    fetchRooms();
-    fetchBookings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { fetchRooms(); fetchBookings(); /* eslint-disable-next-line */ }, []);
 
-  /** =========================
-   * Filter bookings
-   * ========================= */
-  const filteredBookings = bookings.filter((booking) => {
-    const matchesSearch =
-      booking.eventName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      booking.room.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      booking.organiser.toLowerCase().includes(searchQuery.toLowerCase());
+  /** ── Filtered + paginated ── */
+  const filteredBookings = useMemo(() =>
+    bookings.filter((b) => {
+      const matchesSearch =
+        b.eventName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        b.room.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        b.organiser.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesSearch &&
+        (filterRoom      === "all" || b.room      === filterRoom) &&
+        (filterEventType === "all" || b.eventType === filterEventType) &&
+        (filterStatus    === "all" || b.status    === filterStatus);
+    }),
+    [bookings, searchQuery, filterRoom, filterEventType, filterStatus]
+  );
 
-    const matchesRoom = filterRoom === "all" || booking.room === filterRoom;
-    const matchesEventType = filterEventType === "all" || booking.eventType === filterEventType;
-    const matchesStatus = filterStatus === "all" || booking.status === filterStatus;
+  const totalItems = filteredBookings.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const safePage   = Math.min(currentPage, totalPages);
 
-    return matchesSearch && matchesRoom && matchesEventType && matchesStatus;
-  });
+  useEffect(() => { if (currentPage > totalPages) setCurrentPage(totalPages); }, [totalPages, currentPage]);
 
-  /** =========================
-   * Statistics
-   * ========================= */
-  const todayBookings = bookings.filter((b) => {
-    const today = new Date();
-    return b.date.toDateString() === today.toDateString() && b.status === "approved";
-  }).length;
+  const paginatedBookings = useMemo(() => {
+    const start = (safePage - 1) * PAGE_SIZE;
+    return filteredBookings.slice(start, start + PAGE_SIZE);
+  }, [filteredBookings, safePage]);
 
-  const upcomingBookings = bookings.filter((b) => {
-    const today = new Date();
-    return b.date > today && b.status === "approved";
-  }).length;
+  /** ── Stats ── */
+  const todayBookings   = useMemo(() => bookings.filter((b) => b.date.toDateString() === new Date().toDateString() && b.status === "approved").length, [bookings]);
+  const upcomingBookings = useMemo(() => bookings.filter((b) => b.date > new Date() && b.status === "approved").length, [bookings]);
+  const pendingRequests  = useMemo(() => bookings.filter((b) => b.status === "pending").length, [bookings]);
 
-  const pendingRequests = bookings.filter((b) => b.status === "pending").length;
+  /** ── Handlers ── */
+  const handleNewBooking  = () => { setModalError(""); setEditingBooking(null); setIsBookingModalOpen(true); };
+  const handleEditBooking = (b: RoomBooking) => { setModalError(""); setEditingBooking(b); setIsBookingModalOpen(true); setIsDetailModalOpen(false); };
+  const handleViewBooking = (b: RoomBooking) => { setSelectedBooking(b); setIsDetailModalOpen(true); };
 
-  /** =========================
-   * Handlers
-   * ========================= */
-  const handleNewBooking = () => {
-    setModalError("");
-    setEditingBooking(null);
-    setIsBookingModalOpen(true);
-  };
-
-  const handleEditBooking = (booking: RoomBooking) => {
-    setModalError("");
-    setEditingBooking(booking);
-    setIsBookingModalOpen(true);
-    setIsDetailModalOpen(false);
-  };
-
-  const handleViewBooking = (booking: RoomBooking) => {
-    setSelectedBooking(booking);
-    setIsDetailModalOpen(true);
-  };
-
-  /** =========================
-   * Approve / Reject / Delete
-   * (If you don't have these endpoints, tell me your route names)
-   * ========================= */
   const approveBooking = async (id: string) => {
     try {
-      const res = await api.post<ApiSingleResponse<RommBookingApi>>(
-        `/room-bookings/${id}/approve`,
-        {},
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
+      const res = await api.post<ApiSingleResponse<RommBookingApi>>(`/room-bookings/${id}/approve`, {}, { headers: { Authorization: `Bearer ${token}` } });
       if (res.data.status === 1) {
-        const updated = mapApiToUi(res.data.data);
-        setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+        setBookings((prev) => prev.map((b) => (b.id === id ? mapApiToUi(res.data.data) : b)));
         setIsDetailModalOpen(false);
-        setPageSuccess("Booking approved.");
-      } else {
-        setPageError(res.data.message || "Failed to approve booking.");
-      }
-    } catch (err: any) {
-      setPageError(parseApiError(err));
-    }
+        toast.success("Booking approved.");
+      } else { toast.error(res.data.message || "Failed to approve booking."); }
+    } catch (err: any) { toast.error(parseApiError(err)); }
   };
 
   const rejectBooking = async (id: string) => {
     try {
-      const res = await api.post<ApiSingleResponse<RommBookingApi>>(
-        `/room-bookings/${id}/reject`,
-        {},
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
+      const res = await api.post<ApiSingleResponse<RommBookingApi>>(`/room-bookings/${id}/reject`, {}, { headers: { Authorization: `Bearer ${token}` } });
       if (res.data.status === 1) {
-        const updated = mapApiToUi(res.data.data);
-        setBookings((prev) => prev.map((b) => (b.id === id ? updated : b)));
+        setBookings((prev) => prev.map((b) => (b.id === id ? mapApiToUi(res.data.data) : b)));
         setIsDetailModalOpen(false);
-        setPageSuccess("Booking rejected.");
-      } else {
-        setPageError(res.data.message || "Failed to reject booking.");
-      }
-    } catch (err: any) {
-      setPageError(parseApiError(err));
-    }
+        toast.success("Booking rejected.");
+      } else { toast.error(res.data.message || "Failed to reject booking."); }
+    } catch (err: any) { toast.error(parseApiError(err)); }
   };
 
   const deleteBooking = async (id: string) => {
     try {
-      const res = await api.delete<{ status: number; message: string }>(
-        `/room-bookings/${id}`,
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-
+      const res = await api.delete<{ status: number; message: string }>(`/room-bookings/${id}`, { headers: { Authorization: `Bearer ${token}` } });
       if (res.data.status === 1) {
-        setBookings((prev) => prev.filter((b) => b.id !== id));
+        setBookings((prev) => {
+          const updated = prev.filter((b) => b.id !== id);
+          const newLast = Math.max(1, Math.ceil(updated.length / PAGE_SIZE));
+          if (safePage > newLast) setCurrentPage(newLast);
+          return updated;
+        });
         setIsDetailModalOpen(false);
-        setPageSuccess("Booking deleted.");
-      } else {
-        setPageError(res.data.message || "Failed to delete booking.");
-      }
-    } catch (err: any) {
-      setPageError(parseApiError(err));
-    }
+        toast.success("Booking deleted.");
+      } else { toast.error(res.data.message || "Failed to delete booking."); }
+    } catch (err: any) { toast.error(parseApiError(err)); }
   };
 
-  /** =========================
-   * Create / Update (called from modal)
-   * ========================= */
   const saveBooking = async (payload: BookingPayload) => {
     setModalError("");
-    setPageSuccess("");
-    setPageError("");
-
     try {
-      const url = editingBooking ? `/room-bookings/${editingBooking.id}` : `/room-bookings`;
-      const method = editingBooking ? "put" : "post";
-
       const res = await api.request<ApiSingleResponse<RommBookingApi>>({
-        url,
-        method,
+        url: editingBooking ? `/room-bookings/${editingBooking.id}` : `/room-bookings`,
+        method: editingBooking ? "put" : "post",
         data: payload,
         headers: { Authorization: `Bearer ${token}` },
       });
-
       if (res.data.status === 1) {
         const saved = mapApiToUi(res.data.data);
-
-        setBookings((prev) => {
-          if (editingBooking) return prev.map((b) => (b.id === editingBooking.id ? saved : b));
-          return [saved, ...prev];
-        });
-
+        setBookings((prev) =>
+          editingBooking ? prev.map((b) => (b.id === editingBooking.id ? saved : b)) : [saved, ...prev]
+        );
+        if (!editingBooking) setCurrentPage(1);
         setIsBookingModalOpen(false);
         setEditingBooking(null);
-        setPageSuccess(editingBooking ? "Booking updated." : "Booking created.");
+        toast.success(editingBooking ? "Booking updated." : "Booking created.");
         return true;
       }
-
-      // backend custom status 0
       setModalError(res.data.message || "Failed to save booking.");
       return false;
-    } catch (err: any) {
-      // 422 overlap error, validation error etc.
-      setModalError(parseApiError(err));
-      return false;
-    }
+    } catch (err: any) { setModalError(parseApiError(err)); return false; }
   };
 
+  const hasFilters = searchQuery || filterRoom !== "all" || filterEventType !== "all" || filterStatus !== "all";
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h2 className="text-2xl text-dark font-semibold mb-1">Room Bookings & Events</h2>
-            <p className="text-sm text-body">Manage non-classroom bookings and special events</p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-1 p-1 bg-soft rounded-xl">
-              <button
-                onClick={() => setViewMode("table")}
-                className={`px-4 py-2 rounded-lg text-sm transition-colors ${
-                  viewMode === "table" ? "bg-white text-primary-blue shadow-card" : "text-body hover:text-dark"
-                }`}
-              >
-                Table View
-              </button>
-              <button
-                onClick={() => setViewMode("calendar")}
-                className={`px-4 py-2 rounded-lg text-sm transition-colors ${
-                  viewMode === "calendar" ? "bg-white text-primary-blue shadow-card" : "text-body hover:text-dark"
-                }`}
-              >
-                Calendar View
-              </button>
-            </div>
-
-            <button
-              onClick={handleNewBooking}
-              className="px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:bg-blue-600 transition-colors flex items-center gap-2 text-sm"
-            >
-              <Plus className="w-4 h-4" />
-              New Booking
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-primary-blue mb-2">Room Bookings & Events</h1>
+          <p className="text-body">Manage non-classroom bookings and special events</p>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* View toggle */}
+          <div className="flex items-center gap-1 p-1 bg-white border border-light rounded-xl shadow-card">
+            <button onClick={() => setViewMode("table")}
+              className={`px-4 py-2 rounded-lg text-sm transition-all cursor-pointer select-none ${viewMode === "table" ? "bg-primary-blue text-white shadow-sm" : "text-body hover:bg-soft"}`}>
+              Table
+            </button>
+            <button onClick={() => setViewMode("calendar")}
+              className={`px-4 py-2 rounded-lg text-sm transition-all cursor-pointer select-none ${viewMode === "calendar" ? "bg-primary-blue text-white shadow-sm" : "text-body hover:bg-soft"}`}>
+              Calendar
             </button>
           </div>
+          <button onClick={handleNewBooking}
+            className="flex items-center gap-2 px-5 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 active:scale-[0.97] active:opacity-80 transition-all duration-150 shadow-md select-none cursor-pointer">
+            <Plus className="w-4 h-4" />New Booking
+          </button>
         </div>
-
-        {(pageError || pageSuccess) && (
-          <div
-            className={`mt-4 rounded-xl p-4 text-sm border ${
-              pageError ? "bg-red-50 border-red-200 text-red-700" : "bg-green-50 border-green-200 text-green-700"
-            }`}
-          >
-            {pageError || pageSuccess}
-          </div>
-        )}
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-          <div className="flex items-center justify-between">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[
+          { label: "Today's Bookings",  value: todayBookings,    icon: <Calendar className="w-5 h-5 text-primary-blue" />, iconBg: "bg-blue-50" },
+          { label: "Upcoming Events",    value: upcomingBookings, icon: <CalendarDays className="w-5 h-5 text-green-600" />, iconBg: "bg-green-50" },
+          { label: "Pending Requests",   value: pendingRequests,  icon: <Clock className="w-5 h-5 text-orange-600" />, iconBg: "bg-orange-50" },
+        ].map(({ label, value, icon, iconBg }) => (
+          <div key={label} className="bg-white rounded-lg shadow-card p-5 border border-light flex items-center justify-between">
             <div>
-              <p className="text-sm text-body mb-1">Today's Bookings</p>
-              <p className="text-3xl text-dark font-bold">{todayBookings}</p>
+              <p className="text-sm text-body mb-1">{label}</p>
+              {loadingBookings
+                ? <div className="h-9 w-10 rounded bg-gray-200 animate-pulse mt-1" />
+                : <p className="text-3xl text-dark font-bold">{value}</p>
+              }
             </div>
-            <div className="bg-blue-50 p-3 rounded-xl">
-              <Calendar className="w-6 h-6 text-primary-blue" />
-            </div>
+            <div className={`${iconBg} p-3 rounded-xl`}>{icon}</div>
           </div>
-        </div>
-
-        <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-body mb-1">Upcoming Events</p>
-              <p className="text-3xl text-dark font-bold">{upcomingBookings}</p>
-            </div>
-            <div className="bg-green-50 p-3 rounded-xl">
-              <CalendarDays className="w-6 h-6 text-success" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-body mb-1">Pending Requests</p>
-              <p className="text-3xl text-dark font-bold">{pendingRequests}</p>
-            </div>
-            <div className="bg-orange-50 p-3 rounded-xl">
-              <Clock className="w-6 h-6 text-orange-600" />
-            </div>
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          {/* Search */}
-          <div className="lg:col-span-2">
-            <div className="relative">
-              <Search className="w-5 h-5 text-body absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search by event name, room, or organiser..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue"
-              />
-            </div>
+      {/* Filters — compact single row */}
+      <div className="bg-white rounded-xl p-4 border border-light shadow-card">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input type="text" placeholder="Search by event, room, or organiser…"
+              value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm" />
           </div>
-
-          {/* Room */}
-          <div>
-            <select
-              value={filterRoom}
-              onChange={(e) => setFilterRoom(e.target.value)}
-              disabled={loadingRooms}
-              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white disabled:opacity-50"
-            >
-              <option value="all">{loadingRooms ? "Loading..." : "All Rooms"}</option>
-              {rooms.map((r) => (
-                <option key={r.id} value={r.room_name}>
-                  {r.room_name} (cap: {r.capacity})
-                </option>
-              ))}
+          <div className="flex gap-2 flex-wrap sm:flex-nowrap">
+            <select value={filterRoom} onChange={(e) => setFilterRoom(e.target.value)} disabled={loadingRooms}
+              className="flex-1 min-w-[120px] px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white text-body text-sm disabled:opacity-50 cursor-pointer">
+              <option value="all">{loadingRooms ? "Loading…" : "All Rooms"}</option>
+              {rooms.map((r) => <option key={r.id} value={r.room_name}>{r.room_name}</option>)}
             </select>
-          </div>
-
-          {/* Event Type */}
-          <div>
-            <select
-              value={filterEventType}
-              onChange={(e) => setFilterEventType(e.target.value)}
-              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white"
-            >
-              <option value="all">All Event Types</option>
+            <select value={filterEventType} onChange={(e) => setFilterEventType(e.target.value)}
+              className="flex-1 min-w-[120px] px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white text-body text-sm cursor-pointer">
+              <option value="all">All Types</option>
               <option value="workshop">Workshop</option>
               <option value="bootcamp">Bootcamp</option>
               <option value="meeting">Meeting</option>
-              <option value="external">External Event</option>
+              <option value="external">External</option>
               <option value="other">Other</option>
             </select>
-          </div>
-
-          {/* Status */}
-          <div>
-            <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
-              className="w-full px-4 py-2.5 border border-light rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white"
-            >
-              <option value="all">All Statuses</option>
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
+              className="flex-1 min-w-[110px] px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue bg-white text-body text-sm cursor-pointer">
+              <option value="all">All Status</option>
               <option value="pending">Pending</option>
               <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>
             </select>
+            {hasFilters && (
+              <button onClick={() => { setSearchQuery(""); setFilterRoom("all"); setFilterEventType("all"); setFilterStatus("all"); }}
+                className="px-3 py-2.5 border border-gray-300 rounded-xl hover:bg-soft active:bg-soft/80 text-body text-sm flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap">
+                <X className="w-3.5 h-3.5" />Clear
+              </button>
+            )}
           </div>
         </div>
-
-        {loadingBookings && <div className="mt-4 text-sm text-body">Loading bookings...</div>}
       </div>
 
       {/* Content */}
       {viewMode === "table" ? (
-        <BookingsTable bookings={filteredBookings} onView={handleViewBooking} onEdit={handleEditBooking} onCancel={deleteBooking} />
+        <div className="bg-white rounded-xl shadow-card border border-light overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-soft">
+                <tr>
+                  {["Event Name","Type","Room","Date","Time","Organiser","Status","Notifications","Actions"].map((h) => (
+                    <th key={h} className="px-5 py-4 text-left text-sm text-body font-medium whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loadingBookings ? (
+                  Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
+                ) : paginatedBookings.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-6 py-12 text-center text-body">
+                      <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                      No bookings found
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedBookings.map((booking, index) => (
+                    <tr key={booking.id}
+                      className={`border-t border-light hover:bg-soft transition-colors ${index % 2 === 0 ? "bg-white" : "bg-[#FAFAFA]"}`}>
+                      <td className="px-5 py-4">
+                        <p className="text-sm font-medium text-dark">{booking.eventName}</p>
+                        {booking.department !== "—" && <p className="text-xs text-body">{booking.department}</p>}
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${eventTypeColors[booking.eventType].bg} ${eventTypeColors[booking.eventType].text} ${eventTypeColors[booking.eventType].border}`}>
+                          {booking.eventType.charAt(0).toUpperCase() + booking.eventType.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 text-sm text-dark whitespace-nowrap">{booking.room}</td>
+                      <td className="px-5 py-4 text-sm text-dark whitespace-nowrap">
+                        {booking.date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                      </td>
+                      <td className="px-5 py-4 text-sm text-body whitespace-nowrap">{booking.startTime} – {booking.endTime}</td>
+                      <td className="px-5 py-4 text-sm text-dark whitespace-nowrap">{booking.organiser}</td>
+                      <td className="px-5 py-4">
+                        <span className={`px-2.5 py-1 rounded-lg text-xs font-medium border ${statusColors[booking.status].bg} ${statusColors[booking.status].text} ${statusColors[booking.status].border}`}>
+                          {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 text-xs text-body whitespace-nowrap">
+                        {booking.notifications === "all-staff" ? "All Staff" : booking.notifications === "selected-staff" ? "Selected" : "None"}
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-1.5">
+                          <button onClick={() => handleViewBooking(booking)} title="View"
+                            className="p-1.5 text-primary-blue hover:bg-blue-50 active:bg-blue-100 active:scale-95 rounded-lg transition-all duration-100 cursor-pointer">
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => handleEditBooking(booking)} title="Edit"
+                            className="p-1.5 text-sky-blue hover:bg-blue-50 active:bg-blue-100 active:scale-95 rounded-lg transition-all duration-100 cursor-pointer">
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => deleteBooking(booking.id)} title="Delete"
+                            className="p-1.5 text-red-500 hover:bg-red-50 active:bg-red-100 active:scale-95 rounded-lg transition-all duration-100 cursor-pointer">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <PaginationBar currentPage={safePage} totalPages={totalPages} totalItems={totalItems} onPageChange={setCurrentPage} />
+        </div>
       ) : (
         <CalendarView bookings={filteredBookings} onViewBooking={handleViewBooking} />
       )}
 
-      {/* Modal */}
       {isBookingModalOpen && (
         <MultipleBookingsModal
-          // ✅ make your modal accept these:
           rooms={rooms}
           booking={editingBooking}
           errorMessage={modalError}
           onClose={() => setIsBookingModalOpen(false)}
-          onSave={async (payload: BookingPayload) => {
-            const ok = await saveBooking(payload);
-            // if ok==true modal auto closes above
-            return ok;
-          }}
+          onSave={async (payload: BookingPayload) => { const ok = await saveBooking(payload); return ok; }}
         />
       )}
 
-      {/* Detail */}
       {isDetailModalOpen && selectedBooking && (
         <BookingDetailModal
           booking={selectedBooking}
@@ -637,112 +527,7 @@ export default function RoomBookings() {
   );
 }
 
-/** =========================
- * Table
- * ========================= */
-interface BookingsTableProps {
-  bookings: RoomBooking[];
-  onView: (booking: RoomBooking) => void;
-  onEdit: (booking: RoomBooking) => void;
-  onCancel: (bookingId: string) => void;
-}
-
-function BookingsTable({ bookings, onView, onEdit, onCancel }: BookingsTableProps) {
-  return (
-    <div className="bg-white rounded-2xl shadow-card-lg border border-light overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full">
-          <thead className="bg-soft border-b border-light">
-            <tr>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Event Name</th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Event Type</th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Room</th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Date</th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Time</th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Organiser</th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Status</th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Notifications</th>
-              <th className="px-6 py-4 text-left text-xs font-semibold text-dark uppercase tracking-wider">Actions</th>
-            </tr>
-          </thead>
-
-          <tbody className="divide-y divide-light">
-            {bookings.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="px-6 py-12 text-center text-body">
-                  No bookings found
-                </td>
-              </tr>
-            ) : (
-              bookings.map((booking) => (
-                <tr key={booking.id} className="hover:bg-soft transition-colors">
-                  <td className="px-6 py-4">
-                    <p className="text-sm font-medium text-dark">{booking.eventName}</p>
-                    <p className="text-xs text-body">{booking.department}</p>
-                  </td>
-
-                  <td className="px-6 py-4">
-                    <span
-                      className={`px-3 py-1 rounded-lg text-xs font-medium border ${eventTypeColors[booking.eventType].bg} ${eventTypeColors[booking.eventType].text} ${eventTypeColors[booking.eventType].border}`}
-                    >
-                      {booking.eventType.charAt(0).toUpperCase() + booking.eventType.slice(1)}
-                    </span>
-                  </td>
-
-                  <td className="px-6 py-4 text-sm text-dark">{booking.room}</td>
-
-                  <td className="px-6 py-4 text-sm text-dark">
-                    {booking.date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                  </td>
-
-                  <td className="px-6 py-4 text-sm text-dark">
-                    {booking.startTime} - {booking.endTime}
-                  </td>
-
-                  <td className="px-6 py-4 text-sm text-dark">{booking.organiser}</td>
-
-                  <td className="px-6 py-4">
-                    <span
-                      className={`px-3 py-1 rounded-lg text-xs font-medium border ${statusColors[booking.status].bg} ${statusColors[booking.status].text} ${statusColors[booking.status].border}`}
-                    >
-                      {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
-                    </span>
-                  </td>
-
-                  <td className="px-6 py-4">
-                    <span className="text-xs text-body">
-                      {booking.notifications === "all-staff" && "All Staff"}
-                      {booking.notifications === "selected-staff" && "Selected Staff"}
-                      {booking.notifications === "none" && "None"}
-                    </span>
-                  </td>
-
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => onView(booking)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors" title="View Details">
-                        <Eye className="w-4 h-4 text-primary-blue" />
-                      </button>
-                      <button onClick={() => onEdit(booking)} className="p-2 hover:bg-blue-50 rounded-lg transition-colors" title="Edit Booking">
-                        <Edit2 className="w-4 h-4 text-primary-blue" />
-                      </button>
-                      <button onClick={() => onCancel(booking.id)} className="p-2 hover:bg-red-50 rounded-lg transition-colors" title="Cancel Booking">
-                        <X className="w-4 h-4 text-red-600" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/** =========================
- * Calendar View (your same UI, simplified list)
- * ========================= */
+/** ========================= Calendar View ========================= */
 interface CalendarViewProps {
   bookings: RoomBooking[];
   onViewBooking: (booking: RoomBooking) => void;
@@ -759,35 +544,19 @@ function CalendarView({ bookings, onViewBooking }: CalendarViewProps) {
   }, {} as Record<string, RoomBooking[]>);
 
   return (
-    <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => {
-              const d = new Date(currentDate);
-              d.setMonth(d.getMonth() - 1);
-              setCurrentDate(d);
-            }}
-            className="p-2 hover:bg-soft rounded-lg transition-colors"
-          >
-            <ChevronLeft className="w-5 h-5 text-body" />
-          </button>
-
-          <h3 className="text-lg font-semibold text-dark">
-            {currentDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-          </h3>
-
-          <button
-            onClick={() => {
-              const d = new Date(currentDate);
-              d.setMonth(d.getMonth() + 1);
-              setCurrentDate(d);
-            }}
-            className="p-2 hover:bg-soft rounded-lg transition-colors"
-          >
-            <ChevronRight className="w-5 h-5 text-body" />
-          </button>
-        </div>
+    <div className="bg-white rounded-xl shadow-card p-6 border border-light">
+      <div className="flex items-center gap-4 mb-6">
+        <button onClick={() => { const d = new Date(currentDate); d.setMonth(d.getMonth() - 1); setCurrentDate(d); }}
+          className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer">
+          <ChevronLeft className="w-5 h-5 text-body" />
+        </button>
+        <h3 className="text-dark font-semibold">
+          {currentDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+        </h3>
+        <button onClick={() => { const d = new Date(currentDate); d.setMonth(d.getMonth() + 1); setCurrentDate(d); }}
+          className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer">
+          <ChevronRight className="w-5 h-5 text-body" />
+        </button>
       </div>
 
       <div className="space-y-4">
@@ -799,33 +568,19 @@ function CalendarView({ bookings, onViewBooking }: CalendarViewProps) {
               <h4 className="text-sm font-semibold text-dark mb-3">
                 {new Date(dateKey).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
               </h4>
-
               <div className="space-y-2">
                 {dayBookings.map((booking) => (
-                  <div
-                    key={booking.id}
-                    onClick={() => onViewBooking(booking)}
-                    className={`p-3 rounded-lg border cursor-pointer hover:shadow-card transition-all ${eventTypeColors[booking.eventType].bg} ${eventTypeColors[booking.eventType].border}`}
-                  >
+                  <div key={booking.id} onClick={() => onViewBooking(booking)}
+                    className={`p-3 rounded-lg border cursor-pointer hover:shadow-card transition-all ${eventTypeColors[booking.eventType].bg} ${eventTypeColors[booking.eventType].border}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1">
                         <p className="text-sm font-medium text-dark mb-1">{booking.eventName}</p>
-                        <div className="flex items-center gap-3 text-xs text-body">
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {booking.startTime} - {booking.endTime}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Building2 className="w-3 h-3" />
-                            {booking.room}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Users className="w-3 h-3" />
-                            {booking.organiser}
-                          </span>
+                        <div className="flex items-center gap-3 text-xs text-body flex-wrap">
+                          <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{booking.startTime} – {booking.endTime}</span>
+                          <span className="flex items-center gap-1"><Building2 className="w-3 h-3" />{booking.room}</span>
+                          <span className="flex items-center gap-1"><Users className="w-3 h-3" />{booking.organiser}</span>
                         </div>
                       </div>
-
                       <span className={`px-2 py-1 rounded text-xs font-medium ${statusColors[booking.status].bg} ${statusColors[booking.status].text}`}>
                         {booking.status}
                       </span>
@@ -835,15 +590,19 @@ function CalendarView({ bookings, onViewBooking }: CalendarViewProps) {
               </div>
             </div>
           ))}
+
+        {Object.keys(bookingsByDate).length === 0 && (
+          <div className="text-center py-12">
+            <CalendarDays className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+            <p className="text-body">No bookings to display</p>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-/** =========================
- * Detail Modal
- * (updated to show room info + staff names from API)
- * ========================= */
+/** ========================= Detail Modal ========================= */
 interface BookingDetailModalProps {
   booking: RoomBooking;
   onClose: () => void;
@@ -855,126 +614,87 @@ interface BookingDetailModalProps {
 
 function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onCancel }: BookingDetailModalProps) {
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-card-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-light flex items-center justify-between sticky top-0 bg-white">
-          <h3 className="text-lg font-semibold text-dark">Booking Details</h3>
-          <button onClick={onClose} className="p-2 hover:bg-soft rounded-lg transition-colors">
+    <div className="fixed inset-0 bg-white/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="px-6 py-4 border-b border-light flex items-center justify-between sticky top-0 bg-white z-10">
+          <h2 className="text-primary-blue">Booking Details</h2>
+          <button onClick={onClose} className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer">
             <X className="w-5 h-5 text-body" />
           </button>
         </div>
 
-        <div className="p-6 space-y-6">
-          <div className="flex items-center gap-3">
-            <span className={`px-4 py-2 rounded-xl text-sm font-medium border ${statusColors[booking.status].bg} ${statusColors[booking.status].text} ${statusColors[booking.status].border}`}>
+        <div className="p-6 space-y-5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`px-3 py-1 rounded-lg text-sm font-medium border ${statusColors[booking.status].bg} ${statusColors[booking.status].text} ${statusColors[booking.status].border}`}>
               {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
             </span>
-            <span className={`px-4 py-2 rounded-xl text-sm font-medium border ${eventTypeColors[booking.eventType].bg} ${eventTypeColors[booking.eventType].text} ${eventTypeColors[booking.eventType].border}`}>
+            <span className={`px-3 py-1 rounded-lg text-sm font-medium border ${eventTypeColors[booking.eventType].bg} ${eventTypeColors[booking.eventType].text} ${eventTypeColors[booking.eventType].border}`}>
               {booking.eventType.charAt(0).toUpperCase() + booking.eventType.slice(1)}
             </span>
           </div>
 
-          <div>
-            <h4 className="text-sm font-semibold text-dark mb-3">Event Details</h4>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-body">Event Name</label>
-                <p className="text-sm text-dark mt-1">{booking.eventName}</p>
-              </div>
-
-              {booking.description && (
-                <div>
-                  <label className="text-xs font-medium text-body">Description</label>
-                  <p className="text-sm text-dark mt-1">{booking.description}</p>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-body">Department</label>
-                  <p className="text-sm text-dark mt-1">{booking.department}</p>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-body">Organiser</label>
-                  <p className="text-sm text-dark mt-1">{booking.organiser}</p>
-                </div>
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 bg-soft rounded-lg border border-light md:col-span-2">
+              <label className="text-xs text-body mb-1 block">Event Name</label>
+              <p className="text-dark font-medium">{booking.eventName}</p>
+              {booking.description && <p className="text-sm text-body mt-1">{booking.description}</p>}
+            </div>
+            <div className="p-4 bg-soft rounded-lg border border-light">
+              <label className="text-xs text-body mb-1 block">Organiser</label>
+              <p className="text-dark text-sm">{booking.organiser}</p>
+              {booking.organiserEmail && <p className="text-xs text-body">{booking.organiserEmail}</p>}
+            </div>
+            <div className="p-4 bg-soft rounded-lg border border-light">
+              <label className="text-xs text-body mb-1 block">Department</label>
+              <p className="text-dark text-sm">{booking.department}</p>
             </div>
           </div>
 
-          <div>
-            <h4 className="text-sm font-semibold text-dark mb-3">Room & Schedule</h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-medium text-body">Room</label>
-                <p className="text-sm text-dark mt-1">{booking.room}</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: "Room",             value: booking.room },
+              { label: "Capacity Needed",  value: String(booking.capacityNeeded ?? "N/A") },
+              { label: "Date",             value: booking.date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) },
+              { label: "Time",             value: `${booking.startTime} – ${booking.endTime}` },
+            ].map(({ label, value }) => (
+              <div key={label} className="p-4 bg-soft rounded-lg border border-light">
+                <label className="text-xs text-body mb-1 block">{label}</label>
+                <p className="text-dark text-sm">{value}</p>
               </div>
-
-              <div>
-                <label className="text-xs font-medium text-body">Capacity Needed</label>
-                <p className="text-sm text-dark mt-1">{booking.capacityNeeded ?? "N/A"}</p>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-body">Date</label>
-                <p className="text-sm text-dark mt-1">
-                  {booking.date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
-                </p>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-body">Time</label>
-                <p className="text-sm text-dark mt-1">{booking.startTime} - {booking.endTime}</p>
-              </div>
-            </div>
+            ))}
           </div>
 
           {booking.equipment?.length ? (
             <div>
-              <h4 className="text-sm font-semibold text-dark mb-3">Equipment Needed</h4>
+              <label className="text-sm text-body mb-2 block">Equipment Needed</label>
               <div className="flex flex-wrap gap-2">
                 {booking.equipment.map((item, idx) => (
-                  <span key={idx} className="px-3 py-1 bg-soft text-dark text-xs rounded-lg border border-light">
-                    {item}
-                  </span>
+                  <span key={idx} className="px-3 py-1 bg-soft text-dark text-xs rounded-lg border border-light">{item}</span>
                 ))}
               </div>
             </div>
           ) : null}
 
-          <div>
-            <h4 className="text-sm font-semibold text-dark mb-3">Notifications</h4>
-            <div className="space-y-2">
-              <p className="text-sm text-dark">
-                Type:{" "}
-                <span className="font-medium">
-                  {booking.notifications === "all-staff" && "All Staff"}
-                  {booking.notifications === "selected-staff" && "Selected Staff"}
-                  {booking.notifications === "none" && "None"}
-                </span>
-              </p>
-
-              {booking.selectedStaff?.length ? (
-                <div>
-                  <label className="text-xs font-medium text-body">Selected Staff</label>
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {booking.selectedStaff.map((staff, idx) => (
-                      <span key={idx} className="px-3 py-1 bg-blue-50 text-primary-blue text-xs rounded-lg border border-blue-200">
-                        {staff}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
+          <div className="p-4 bg-soft rounded-lg border border-light">
+            <label className="text-xs text-body mb-1 block">Notifications</label>
+            <p className="text-dark text-sm font-medium">
+              {booking.notifications === "all-staff" ? "All Staff" : booking.notifications === "selected-staff" ? "Selected Staff" : "None"}
+            </p>
+            {booking.selectedStaff?.length ? (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {booking.selectedStaff.map((staff, idx) => (
+                  <span key={idx} className="px-2.5 py-1 bg-blue-50 text-primary-blue text-xs rounded-lg border border-blue-200">{staff}</span>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           {booking.notes && (
             <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
               <div className="flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 text-yellow-600 mt-0.5" />
+                <AlertCircle className="w-4 h-4 text-yellow-600 mt-0.5 flex-shrink-0" />
                 <div>
-                  <h4 className="text-sm font-semibold text-yellow-900 mb-1">Admin Notes</h4>
+                  <p className="text-sm font-semibold text-yellow-900 mb-1">Admin Notes</p>
                   <p className="text-sm text-yellow-800">{booking.notes}</p>
                 </div>
               </div>
@@ -982,40 +702,26 @@ function BookingDetailModal({ booking, onClose, onEdit, onApprove, onReject, onC
           )}
         </div>
 
-        <div className="p-6 border-t border-light flex items-center justify-between gap-3">
+        <div className="px-6 py-4 border-t border-light flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2">
-            {booking.status === "pending" && (
-              <>
-                <button
-                  onClick={() => onApprove(booking.id)}
-                  className="px-4 py-2 bg-success text-white rounded-xl hover:bg-green-600 transition-colors flex items-center gap-2 text-sm"
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  Approve
-                </button>
-                <button
-                  onClick={() => onReject(booking.id)}
-                  className="px-4 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors flex items-center gap-2 text-sm"
-                >
-                  <XCircle className="w-4 h-4" />
-                  Reject
-                </button>
-              </>
-            )}
+            {booking.status === "pending" && (<>
+              <button onClick={() => onApprove(booking.id)}
+                className="px-4 py-2.5 bg-green-500 text-white rounded-xl hover:bg-green-600 active:bg-green-700 active:scale-[0.98] transition-all duration-150 flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <CheckCircle className="w-4 h-4" />Approve
+              </button>
+              <button onClick={() => onReject(booking.id)}
+                className="px-4 py-2.5 bg-red-500 text-white rounded-xl hover:bg-red-600 active:bg-red-700 active:scale-[0.98] transition-all duration-150 flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <XCircle className="w-4 h-4" />Reject
+              </button>
+            </>)}
           </div>
-
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => onEdit(booking)}
-              className="px-4 py-2 text-primary-blue hover:bg-blue-50 rounded-xl transition-colors flex items-center gap-2 text-sm"
-            >
-              <Edit2 className="w-4 h-4" />
-              Edit
+            <button onClick={() => onEdit(booking)}
+              className="px-4 py-2.5 text-primary-blue hover:bg-blue-50 active:bg-blue-100 active:scale-[0.98] rounded-xl transition-all duration-150 flex items-center gap-2 text-sm cursor-pointer">
+              <Edit2 className="w-4 h-4" />Edit
             </button>
-            <button
-              onClick={() => onCancel(booking.id)}
-              className="px-4 py-2 text-red-600 hover:bg-red-50 rounded-xl transition-colors text-sm"
-            >
+            <button onClick={() => onCancel(booking.id)}
+              className="px-4 py-2.5 text-red-500 hover:bg-red-50 active:bg-red-100 active:scale-[0.98] rounded-xl transition-all duration-150 text-sm cursor-pointer">
               Cancel Booking
             </button>
           </div>

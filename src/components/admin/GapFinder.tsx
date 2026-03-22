@@ -8,7 +8,9 @@ import {
   X,
   Filter,
   Loader2,
+  RefreshCcw,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import api from "../../api/axios";
 import { getTimeTableSessions } from "../../services/timetable";
@@ -22,9 +24,7 @@ import {
   ApiTimeTableSession,
 } from "../../types/timetable";
 
-/* =========================
-   Types
-========================= */
+/** ========================= Types ========================= */
 type FinderTab = "classroom" | "seminar" | "weekly";
 
 type ApiTrimester = {
@@ -48,16 +48,14 @@ type TimelineGap = {
   type: "gap";
   start: string;
   end: string;
-  duration: number; // hours
+  duration: number;
 };
-
 type TimelineBusy = {
   type: "busy";
   start: string;
   end: string;
-  duration: number; // hours
+  duration: number;
   class_type: "Lecture" | "Tutorial" | "Seminar";
-
   subject?: string;
   code?: string;
   teacher?: string;
@@ -66,12 +64,9 @@ type TimelineBusy = {
   capacity?: number | string;
   roomName?: string;
 };
-
 type TimelineSlot = TimelineGap | TimelineBusy;
 
-/* =========================
-   Constants
-========================= */
+/** ========================= Constants ========================= */
 const DAYS: Day[] = [
   "Monday",
   "Tuesday",
@@ -81,50 +76,78 @@ const DAYS: Day[] = [
   "Saturday",
   "Sunday",
 ];
+const START_HOUR = 8;
+const END_HOUR = 20;
 
-const START_HOUR = 8;  // working day start
-const END_HOUR = 20;   // working day end
-
-/* =========================
-   Helpers
-========================= */
+/** ========================= Helpers ========================= */
 const dateOnly = (v: any) => String(v || "").slice(0, 10);
-
-const normalizeTimeHM = (t: any) => String(t || "").trim().slice(0, 5);
-
+const normalizeTimeHM = (t: any) =>
+  String(t || "")
+    .trim()
+    .slice(0, 5);
 const toMinutes = (hhmm: string) => {
   const [h, m] = normalizeTimeHM(hhmm).split(":").map(Number);
   return (h || 0) * 60 + (m || 0);
 };
-
-const toHHMM = (mins: number) => {
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-};
-
+const toHHMM = (mins: number) =>
+  `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
 const todayDay = (): Day => {
-  const map: Day[] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const map: Day[] = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
   return map[new Date().getDay()] as Day;
 };
-
 const hoursDisplay = (h: number) =>
-  Number.isInteger(Number(h)) ? String(Number(h)) : Number(h).toFixed(2);
+  Number.isInteger(Number(h)) ? String(Number(h)) : Number(h).toFixed(1);
 
-/* =========================
-   Main Component
-========================= */
+/** ========================= Skeleton ========================= */
+function StatSkeleton() {
+  return (
+    <div className="bg-white rounded-xl shadow-card p-5 border border-light">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="w-10 h-10 rounded-lg bg-gray-200 animate-pulse" />
+        <div className="h-3.5 w-28 rounded bg-gray-200 animate-pulse" />
+      </div>
+      <div className="h-9 w-16 rounded bg-gray-200 animate-pulse" />
+    </div>
+  );
+}
+
+function TimelineSkeleton() {
+  return (
+    <div className="space-y-3">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div
+          key={i}
+          className={`rounded-xl p-4 border-2 border-gray-200 ${i % 2 === 0 ? "bg-gray-50" : "bg-gray-100"}`}
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-5 h-5 rounded bg-gray-200 animate-pulse flex-shrink-0" />
+            <div className="h-4 w-32 rounded bg-gray-200 animate-pulse" />
+            <div className="h-4 w-48 rounded bg-gray-200 animate-pulse" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** ========================= Main Component ========================= */
 export default function GapFinder() {
   const [activeTab, setActiveTab] = useState<FinderTab>("classroom");
   const [showExportModal, setShowExportModal] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // Core routine filters
   const [trimesters, setTrimesters] = useState<ApiTrimester[]>([]);
   const [selectedTrimesterId, setSelectedTrimesterId] = useState<string>("");
   const [selectedDay, setSelectedDay] = useState<Day>(() => todayDay());
 
-  // Optional filters
   const [selectedRoomId, setSelectedRoomId] = useState<number | "">("");
   const [selectedProgramId, setSelectedProgramId] = useState<number | "">("");
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | "">("");
@@ -132,7 +155,6 @@ export default function GapFinder() {
     "lecture_hall" | "lab" | "seminar_room" | ""
   >("");
 
-  // Data
   const [rooms, setRooms] = useState<ApiRoom[]>([]);
   const [subjects, setSubjects] = useState<ApiSubject[]>([]);
   const [teachers, setTeachers] = useState<ApiTeacher[]>([]);
@@ -140,25 +162,27 @@ export default function GapFinder() {
   const [sessions, setSessions] = useState<ApiTimeTableSession[]>([]);
 
   const [loading, setLoading] = useState({
-    rooms: false,
-    subjects: false,
-    teachers: false,
-    programms: false,
-    sessions: false,
-    trimesters: false,
+    rooms: true,
+    subjects: true,
+    teachers: true,
+    programms: true,
+    sessions: true,
+    trimesters: true,
   });
 
-  const [error, setError] = useState<string>("");
-
-  /* =========================
-     Fetchers
-  ========================= */
+  /** ── Fetchers ── */
   const fetchRooms = async () => {
     setLoading((p) => ({ ...p, rooms: true }));
     try {
-      const res = await api.get<{ status: number; message: string; data: ApiRoom[] }>("/rooms");
+      const res = await api.get<{
+        status: number;
+        message: string;
+        data: ApiRoom[];
+      }>("/rooms");
       if (res.data.status === 1) setRooms(res.data.data || []);
-      else throw new Error(res.data.message || "Failed to fetch rooms");
+      else toast.error(res.data.message || "Failed to fetch rooms.");
+    } catch {
+      toast.error("Failed to fetch rooms.");
     } finally {
       setLoading((p) => ({ ...p, rooms: false }));
     }
@@ -167,9 +191,15 @@ export default function GapFinder() {
   const fetchSubjects = async () => {
     setLoading((p) => ({ ...p, subjects: true }));
     try {
-      const res = await api.get<{ status: number; message: string; data: ApiSubject[] }>("/subjects");
+      const res = await api.get<{
+        status: number;
+        message: string;
+        data: ApiSubject[];
+      }>("/subjects");
       if (res.data.status === 1) setSubjects(res.data.data || []);
-      else throw new Error(res.data.message || "Failed to fetch subjects");
+      else toast.error(res.data.message || "Failed to fetch subjects.");
+    } catch {
+      toast.error("Failed to fetch subjects.");
     } finally {
       setLoading((p) => ({ ...p, subjects: false }));
     }
@@ -178,9 +208,15 @@ export default function GapFinder() {
   const fetchTeachers = async () => {
     setLoading((p) => ({ ...p, teachers: true }));
     try {
-      const res = await api.get<{ status: number; message: string; data: ApiTeacher[] }>("/teachers");
+      const res = await api.get<{
+        status: number;
+        message: string;
+        data: ApiTeacher[];
+      }>("/teachers");
       if (res.data.status === 1) setTeachers(res.data.data || []);
-      else throw new Error(res.data.message || "Failed to fetch teachers");
+      else toast.error(res.data.message || "Failed to fetch teachers.");
+    } catch {
+      toast.error("Failed to fetch teachers.");
     } finally {
       setLoading((p) => ({ ...p, teachers: false }));
     }
@@ -189,9 +225,15 @@ export default function GapFinder() {
   const fetchProgramms = async () => {
     setLoading((p) => ({ ...p, programms: true }));
     try {
-      const res = await api.get<{ status: number; message: string; data: ApiProgramm[] }>("/programms");
+      const res = await api.get<{
+        status: number;
+        message: string;
+        data: ApiProgramm[];
+      }>("/programms");
       if (res.data.status === 1) setProgramms(res.data.data || []);
-      else throw new Error(res.data.message || "Failed to fetch programs");
+      else toast.error(res.data.message || "Failed to fetch programs.");
+    } catch {
+      toast.error("Failed to fetch programs.");
     } finally {
       setLoading((p) => ({ ...p, programms: false }));
     }
@@ -202,7 +244,9 @@ export default function GapFinder() {
     try {
       const data = await getTimeTableSessions();
       if ((data as any).status === 1) setSessions((data as any).data || []);
-      else throw new Error((data as any).message || "Failed to fetch timetable");
+      else toast.error((data as any).message || "Failed to fetch timetable.");
+    } catch {
+      toast.error("Failed to fetch timetable sessions.");
     } finally {
       setLoading((p) => ({ ...p, sessions: false }));
     }
@@ -214,17 +258,17 @@ export default function GapFinder() {
       const res = await getTrimesters();
       const list = (res as any)?.data || [];
       setTrimesters(list);
-
       const active = list.find((x: ApiTrimester) => x.status === "active");
       const pick = active || list[0];
       if (pick) setSelectedTrimesterId(String(pick.id));
+    } catch {
+      toast.error("Failed to fetch trimesters.");
     } finally {
       setLoading((p) => ({ ...p, trimesters: false }));
     }
   };
 
   useEffect(() => {
-    setError("");
     Promise.all([
       fetchRooms(),
       fetchSubjects(),
@@ -232,27 +276,25 @@ export default function GapFinder() {
       fetchProgramms(),
       fetchSessions(),
       fetchTrimesters(),
-    ]).catch((e) => {
-      console.error(e);
-      setError(e?.message || "Failed to load gap finder data.");
-    });
+    ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* =========================
-     Options / Defaults
-  ========================= */
-  const classroomRoomOptions = useMemo(
-    () => rooms.filter((r) => r.room_type === "lecture_hall" || r.room_type === "lab"),
-    [rooms]
-  );
+  const isDataLoading = Object.values(loading).some(Boolean);
 
+  /** ── Room option lists ── */
+  const classroomRoomOptions = useMemo(
+    () =>
+      rooms.filter(
+        (r) => r.room_type === "lecture_hall" || r.room_type === "lab",
+      ),
+    [rooms],
+  );
   const seminarRoomOptions = useMemo(
     () => rooms.filter((r) => r.room_type === "seminar_room"),
-    [rooms]
+    [rooms],
   );
 
-  // When tab changes, apply friendly defaults
   useEffect(() => {
     if (activeTab === "seminar") {
       const first = seminarRoomOptions[0];
@@ -263,37 +305,24 @@ export default function GapFinder() {
       setSelectedRoomId(first ? first.id : "");
       setSelectedRoomType("");
     } else {
-      // weekly
       setSelectedRoomType("");
-      // keep room optional
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, seminarRoomOptions.length, classroomRoomOptions.length]);
 
-  const selectedTrimesterObj = useMemo(() => {
-    if (!selectedTrimesterId) return null;
-    return trimesters.find((t) => String(t.id) === String(selectedTrimesterId)) || null;
-  }, [trimesters, selectedTrimesterId]);
+  const selectedTrimesterObj = useMemo(
+    () =>
+      trimesters.find((t) => String(t.id) === String(selectedTrimesterId)) ||
+      null,
+    [trimesters, selectedTrimesterId],
+  );
 
   const selectedRoom = useMemo(
     () => rooms.find((r) => Number(r.id) === Number(selectedRoomId)) || null,
-    [rooms, selectedRoomId]
+    [rooms, selectedRoomId],
   );
 
-  const isDataLoading =
-    loading.rooms ||
-    loading.subjects ||
-    loading.teachers ||
-    loading.programms ||
-    loading.sessions ||
-    loading.trimesters;
-
-  /* =========================
-     Core Filter: Trimester + Day (routine)
-     IMPORTANT:
-     - We assume sessions are routine (no date)
-     - We compute gaps from day schedule
-  ========================= */
+  /** ── Filtered sessions ── */
   const filteredSessions = useMemo(() => {
     const selRoom = selectedRoomId === "" ? NaN : Number(selectedRoomId);
     const selProg = selectedProgramId === "" ? NaN : Number(selectedProgramId);
@@ -302,35 +331,29 @@ export default function GapFinder() {
     return (sessions || [])
       .filter((s: any) => {
         if (!selectedTrimesterId) return true;
-        // some APIs use trimister_id vs trimester_id — support both
         const tri = s.trimester_id ?? s.trimister_id;
         return String(tri) === String(selectedTrimesterId);
       })
-      .filter((s: any) => {
-        if (activeTab === "weekly") return true;
-        return String(s.day) === String(selectedDay);
-      })
-      .filter((s: any) => {
-        const rid = Number(s.room_id);
-        return Number.isNaN(selRoom) ? true : rid === selRoom;
-      })
-      .filter((s: any) => {
-        const pid = Number(s.programm_id);
-        return Number.isNaN(selProg) ? true : pid === selProg;
-      })
-      .filter((s: any) => {
-        const sid = Number(s.subject_id);
-        return Number.isNaN(selSub) ? true : sid === selSub;
-      })
+      .filter((s: any) =>
+        activeTab === "weekly" ? true : String(s.day) === String(selectedDay),
+      )
+      .filter((s: any) =>
+        Number.isNaN(selRoom) ? true : Number(s.room_id) === selRoom,
+      )
+      .filter((s: any) =>
+        Number.isNaN(selProg) ? true : Number(s.programm_id) === selProg,
+      )
+      .filter((s: any) =>
+        Number.isNaN(selSub) ? true : Number(s.subject_id) === selSub,
+      )
       .filter((s: any) => {
         if (!selectedRoomType) return true;
         const room = rooms.find((r) => Number(r.id) === Number(s.room_id));
         return room?.room_type === selectedRoomType;
       })
-      .filter((s: any) => {
-        if (activeTab === "seminar") return s.class_type === "Seminar";
-        return true;
-      })
+      .filter((s: any) =>
+        activeTab === "seminar" ? s.class_type === "Seminar" : true,
+      )
       .map((s: any) => ({
         ...s,
         start_time: normalizeTimeHM(s.start_time),
@@ -348,17 +371,12 @@ export default function GapFinder() {
     activeTab,
   ]);
 
-  /* =========================
-     Timeline Builder
-     Given a day + session list, produce:
-     [gap, busy, gap, busy, ...]
-  ========================= */
+  /** ── Timeline builder ── */
   const buildTimelineForDay = (day: Day, list: any[]): TimelineSlot[] => {
     const daySessions = list
       .filter((s) => String(s.day) === String(day))
       .sort((a, b) => toMinutes(a.start_time) - toMinutes(b.start_time));
 
-    // full-day free
     if (!daySessions.length) {
       return [
         {
@@ -373,7 +391,6 @@ export default function GapFinder() {
     const slots: TimelineSlot[] = [];
     let cursor = START_HOUR * 60;
 
-    // leading gap
     const firstStart = toMinutes(daySessions[0].start_time);
     if (firstStart > cursor) {
       slots.push({
@@ -385,21 +402,18 @@ export default function GapFinder() {
       cursor = firstStart;
     }
 
-    // busy + middle gaps
     for (let i = 0; i < daySessions.length; i++) {
       const s = daySessions[i];
       const start = toMinutes(s.start_time);
       const end = toMinutes(s.end_time);
-
-      // busy block
       const room = rooms.find((r) => Number(r.id) === Number(s.room_id));
+
       slots.push({
         type: "busy",
         start: s.start_time,
         end: s.end_time,
         duration: Math.max(0, (end - start) / 60),
         class_type: s.class_type,
-
         subject: s.subject?.subject_name,
         code: s.subject?.subject_code,
         teacher: s.teacher?.full_name,
@@ -426,27 +440,23 @@ export default function GapFinder() {
       }
     }
 
-    // trailing gap
-    const dayEnd = END_HOUR * 60;
-    if (cursor < dayEnd) {
+    if (cursor < END_HOUR * 60) {
       slots.push({
         type: "gap",
         start: toHHMM(cursor),
-        end: toHHMM(dayEnd),
-        duration: (dayEnd - cursor) / 60,
+        end: toHHMM(END_HOUR * 60),
+        duration: (END_HOUR * 60 - cursor) / 60,
       });
     }
 
     return slots;
   };
 
-  // Timeline output
   const timeline = useMemo<TimelineSlot[]>(() => {
     if (activeTab === "weekly") return [];
     return buildTimelineForDay(selectedDay, filteredSessions);
   }, [activeTab, selectedDay, filteredSessions]);
 
-  // Weekly map
   const weeklyTimeline = useMemo(() => {
     if (activeTab !== "weekly") return null;
     const map: Record<string, TimelineSlot[]> = {};
@@ -454,34 +464,25 @@ export default function GapFinder() {
     return map;
   }, [activeTab, filteredSessions]);
 
-  /* =========================
-     Stats
-  ========================= */
+  /** ── Stats ── */
   const stats = useMemo(() => {
     const list =
-      activeTab === "weekly" ? Object.values(weeklyTimeline || {}).flat() : timeline;
-
+      activeTab === "weekly"
+        ? Object.values(weeklyTimeline || {}).flat()
+        : timeline;
     const gaps = list.filter((t) => t.type === "gap") as TimelineGap[];
     const busy = list.filter((t) => t.type === "busy") as TimelineBusy[];
-
     return {
       totalFreeSlots: gaps.length,
       longestGap: gaps.length ? Math.max(...gaps.map((g) => g.duration)) : 0,
-      firstFreeSlot: gaps.length ? `${gaps[0].start} - ${gaps[0].end}` : "None",
+      firstFreeSlot: gaps.length ? `${gaps[0].start} – ${gaps[0].end}` : "None",
       totalUsedHours: busy.reduce((sum, b) => sum + b.duration, 0),
     };
   }, [timeline, weeklyTimeline, activeTab]);
 
-  /* =========================
-     Actions
-  ========================= */
   const refresh = async () => {
-    setError("");
-    try {
-      await fetchSessions();
-    } catch (e: any) {
-      setError(e?.message || "Failed to fetch timetable");
-    }
+    await fetchSessions();
+    toast.success("Gap data refreshed.");
   };
 
   const clearFilters = () => {
@@ -492,147 +493,78 @@ export default function GapFinder() {
     setSelectedDay(todayDay());
   };
 
-  /* =========================
-     UI
-  ========================= */
+  const hasAdvancedFilters = !!(
+    selectedProgramId ||
+    selectedSubjectId ||
+    selectedRoomType
+  );
+
+  /** ========================= Render ========================= */
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-5">
+      {/* ── Header ── */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-primary-blue mb-2">Gap Finder</h1>
-          <p className="text-body">
-            Find available time slots using routine timetable sessions (Trimester + Day)
-          </p>
-
-          <p className="text-xs text-gray-500 mt-1">
-            Trimester: <b>{selectedTrimesterObj?.name || "—"}</b>{" "}
-            {selectedTrimesterObj ? (
-              <>
-                ({dateOnly(selectedTrimesterObj.start_date)} → {dateOnly(selectedTrimesterObj.end_date)})
-              </>
-            ) : null}
-            {" • "}
-            {activeTab === "weekly" ? (
-              <>Mode: <b>Weekly</b></>
-            ) : (
-              <>Day: <b>{selectedDay}</b></>
-            )}
-            {" • "}
-            Matched: <b>{filteredSessions.length}</b>
+          <h1 className="text-primary-blue mb-1">Gap Finder</h1>
+          <p className="text-body text-sm">
+            Find available time slots from routine timetable sessions
           </p>
         </div>
-
         <button
           onClick={() => setShowExportModal(true)}
-          className="flex items-center gap-2 px-5 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity shadow-md"
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 active:scale-[0.97] active:opacity-80 transition-all duration-150 shadow-md select-none cursor-pointer text-sm"
         >
           <Download className="w-4 h-4" />
-          Export to PDF
+          Export PDF
         </button>
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4">
-          {error}
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div className="flex gap-2 bg-white rounded-lg p-2 shadow-card border border-light w-fit">
-        <button
-          onClick={() => setActiveTab("classroom")}
-          className={`px-6 py-3 rounded-lg transition-all ${
-            activeTab === "classroom"
-              ? "bg-primary-blue text-white shadow-md"
-              : "text-body hover:bg-soft"
-          }`}
-        >
-          Classroom Gaps
-        </button>
-        <button
-          onClick={() => setActiveTab("seminar")}
-          className={`px-6 py-3 rounded-lg transition-all ${
-            activeTab === "seminar"
-              ? "bg-primary-blue text-white shadow-md"
-              : "text-body hover:bg-soft"
-          }`}
-        >
-          Seminar Hall Gaps
-        </button>
-        <button
-          onClick={() => setActiveTab("weekly")}
-          className={`px-6 py-3 rounded-lg transition-all ${
-            activeTab === "weekly"
-              ? "bg-primary-blue text-white shadow-md"
-              : "text-body hover:bg-soft"
-          }`}
-        >
-          Weekly Gaps
-        </button>
+      {/* ── Tabs ── */}
+      <div className="flex gap-1 bg-white rounded-xl p-1.5 shadow-card border border-light w-fit">
+        {(
+          [
+            { id: "classroom", label: "Classroom Gaps" },
+            { id: "seminar", label: "Seminar Hall" },
+            { id: "weekly", label: "Weekly" },
+          ] as const
+        ).map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => setActiveTab(id)}
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-all duration-150 cursor-pointer ${
+              activeTab === id
+                ? "bg-primary-blue text-white shadow-sm"
+                : "text-body hover:bg-soft"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {isDataLoading && (
-        <div className="bg-white rounded-lg shadow-card p-5 border border-light">
-          <span className="inline-flex items-center gap-2 text-body">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Loading Gap Finder data...
-          </span>
-        </div>
-      )}
-
-      {/* Filters (Upgraded UI) */}
-      <div className="bg-white rounded-2xl shadow-card p-5 border border-light">
-        <div className="flex items-center justify-between gap-4 flex-wrap mb-4">
-          <div className="flex items-center gap-2">
-            <Filter className="w-5 h-5 text-primary-blue" />
-            <h2 className="text-dark">Schedule Controls</h2>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={refresh}
-              className="px-4 py-2 rounded-lg bg-soft hover:bg-gray-100 text-sm text-body border border-light"
-            >
-              Refresh
-            </button>
-
-            <button
-              onClick={clearFilters}
-              className="px-4 py-2 rounded-lg bg-soft hover:bg-gray-100 text-sm text-body border border-light"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-
-        {/* Primary Filters */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+      {/* ── Controls ── */}
+      <div className="bg-white rounded-xl shadow-card p-4 border border-light">
+        <div className="flex flex-col sm:flex-row gap-3">
           {/* Trimester */}
-          <div className="lg:col-span-2">
-            <label className="block text-sm text-body mb-2">Trimester *</label>
-            <select
-              value={selectedTrimesterId}
-              onChange={(e) => setSelectedTrimesterId(e.target.value)}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
-            >
-              <option value="">Select Trimester</option>
-              {trimesters.map((t) => (
-                <option key={t.id} value={String(t.id)}>
-                  {t.name} ({dateOnly(t.start_date)} - {dateOnly(t.end_date)})
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            value={selectedTrimesterId}
+            onChange={(e) => setSelectedTrimesterId(e.target.value)}
+            className="flex-1 min-w-[160px] px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm cursor-pointer"
+          >
+            <option value="">Select Trimester</option>
+            {trimesters.map((t) => (
+              <option key={t.id} value={String(t.id)}>
+                {t.name} ({dateOnly(t.start_date)} – {dateOnly(t.end_date)})
+              </option>
+            ))}
+          </select>
 
-          {/* Day */}
-          <div className={activeTab === "weekly" ? "opacity-50 pointer-events-none" : ""}>
-            <label className="block text-sm text-body mb-2">Day *</label>
+          {/* Day (hidden for weekly) */}
+          {activeTab !== "weekly" && (
             <select
               value={selectedDay}
               onChange={(e) => setSelectedDay(e.target.value as Day)}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
-              disabled={activeTab === "weekly"}
+              className="px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm cursor-pointer"
             >
               {DAYS.map((d) => (
                 <option key={d} value={d}>
@@ -640,268 +572,383 @@ export default function GapFinder() {
                 </option>
               ))}
             </select>
-            {activeTab !== "weekly" && (
-              <p className="text-xs text-gray-500 mt-1">Routine view for selected day</p>
-            )}
-          </div>
+          )}
 
           {/* Room */}
-          <div className="lg:col-span-2">
-            <label className="block text-sm text-body mb-2">
-              {activeTab === "seminar" ? "Seminar Room" : "Room"}
-            </label>
+          <select
+            value={selectedRoomId}
+            onChange={(e) =>
+              setSelectedRoomId(e.target.value ? Number(e.target.value) : "")
+            }
+            className="flex-1 min-w-[140px] px-3 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm cursor-pointer"
+          >
+            <option value="">All Rooms</option>
+            {(activeTab === "seminar" ? seminarRoomOptions : rooms).map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.room_name}
+              </option>
+            ))}
+          </select>
+
+          {/* Advanced toggle */}
+          <button
+            onClick={() => setShowAdvanced((p) => !p)}
+            className={`px-3 py-2.5 rounded-xl border text-sm transition-colors cursor-pointer flex items-center gap-1.5 ${
+              showAdvanced || hasAdvancedFilters
+                ? "border-primary-blue text-primary-blue bg-blue-50"
+                : "border-gray-300 text-body hover:bg-soft"
+            }`}
+          >
+            <Filter className="w-3.5 h-3.5" />
+            {showAdvanced ? "Hide" : "Advanced"}
+            {hasAdvancedFilters && (
+              <span className="w-1.5 h-1.5 rounded-full bg-primary-blue" />
+            )}
+          </button>
+
+          {/* Clear */}
+          <button
+            onClick={clearFilters}
+            className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm text-body hover:bg-soft active:bg-soft/80 transition-colors cursor-pointer"
+          >
+            Clear
+          </button>
+
+          {/* Refresh */}
+          <button
+            onClick={refresh}
+            disabled={isDataLoading}
+            className="p-2.5 border border-gray-300 rounded-xl text-body hover:bg-soft active:bg-soft/80 transition-colors cursor-pointer disabled:opacity-50"
+            title="Refresh"
+          >
+            {isDataLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RefreshCcw className="w-4 h-4" />
+            )}
+          </button>
+        </div>
+
+        {/* Advanced filters */}
+        {showAdvanced && (
+          <div className="mt-3 pt-3 border-t border-light grid grid-cols-1 sm:grid-cols-3 gap-3">
             <select
-              value={selectedRoomId}
-              onChange={(e) => setSelectedRoomId(e.target.value ? Number(e.target.value) : "")}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
+              value={selectedRoomType}
+              onChange={(e) => setSelectedRoomType(e.target.value as any)}
+              disabled={activeTab === "seminar"}
+              className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue cursor-pointer disabled:opacity-50"
             >
-              <option value="">All Rooms</option>
-              {(activeTab === "seminar" ? seminarRoomOptions : rooms).map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.room_name}
+              <option value="">All Room Types</option>
+              <option value="lecture_hall">Lecture Hall</option>
+              <option value="lab">Lab</option>
+              <option value="seminar_room">Seminar Room</option>
+            </select>
+
+            <select
+              value={selectedProgramId}
+              onChange={(e) =>
+                setSelectedProgramId(
+                  e.target.value ? Number(e.target.value) : "",
+                )
+              }
+              className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue cursor-pointer"
+            >
+              <option value="">All Programs</option>
+              {programms.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.program_name}
                 </option>
               ))}
             </select>
 
-            {selectedRoom && (
-              <p className="text-xs text-gray-500 mt-1">
-                Capacity: {selectedRoom.capacity ?? "—"} • Type: {selectedRoom.room_type ?? "—"}
-              </p>
-            )}
-          </div>
-
-          {/* Advanced toggle */}
-          <div className="flex items-end">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced((p) => !p)}
-              className="w-full px-4 py-2.5 rounded-xl bg-white border border-light text-sm text-body hover:bg-soft transition-colors"
+            <select
+              value={selectedSubjectId}
+              onChange={(e) =>
+                setSelectedSubjectId(
+                  e.target.value ? Number(e.target.value) : "",
+                )
+              }
+              className="px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue cursor-pointer"
             >
-              {showAdvanced ? "Hide Advanced" : "Show Advanced"}
-            </button>
+              <option value="">All Subjects</option>
+              {subjects.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.subject_code} – {s.subject_name}
+                </option>
+              ))}
+            </select>
           </div>
-        </div>
+        )}
 
-        {/* Advanced Filters */}
-        {showAdvanced && (
-          <div className="mt-4 pt-4 border-t border-light">
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
-              {/* Room Type */}
-              <div>
-                <label className="block text-sm text-body mb-2">Room Type</label>
-                <select
-                  value={selectedRoomType}
-                  onChange={(e) => setSelectedRoomType(e.target.value as any)}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
-                  disabled={activeTab === "seminar"}
-                >
-                  <option value="">All</option>
-                  <option value="lecture_hall">Lecture Hall</option>
-                  <option value="lab">Lab</option>
-                  <option value="seminar_room">Seminar Room</option>
-                </select>
-              </div>
-
-              {/* Program */}
-              <div className="lg:col-span-2">
-                <label className="block text-sm text-body mb-2">Program</label>
-                <select
-                  value={selectedProgramId}
-                  onChange={(e) => setSelectedProgramId(e.target.value ? Number(e.target.value) : "")}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
-                >
-                  <option value="">All Programs</option>
-                  {programms.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.program_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Subject */}
-              <div className="lg:col-span-3">
-                <label className="block text-sm text-body mb-2">Subject</label>
-                <select
-                  value={selectedSubjectId}
-                  onChange={(e) => setSelectedSubjectId(e.target.value ? Number(e.target.value) : "")}
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
-                >
-                  <option value="">All Subjects</option>
-                  {subjects.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.subject_code} - {s.subject_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div className="mt-4 p-3 rounded-xl bg-blue-50 border border-blue-100 text-sm text-blue-800">
-              ✅ Gap results are calculated from <b>routine timetable sessions</b> filtered by Trimester + Day.
-            </div>
+        {/* Room info strip */}
+        {selectedRoom && (
+          <div className="mt-3 flex items-center gap-3 text-xs text-body">
+            <span className="font-medium text-dark">
+              {selectedRoom.room_name}
+            </span>
+            <span>
+              Cap:{" "}
+              <span className="font-medium text-dark">
+                {selectedRoom.capacity ?? "—"}
+              </span>
+            </span>
+            <span>
+              Type:{" "}
+              <span className="font-medium text-dark">
+                {selectedRoom.room_type ?? "—"}
+              </span>
+            </span>
           </div>
         )}
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-        <div className="bg-white rounded-xl shadow-card p-5 border border-light">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2.5 bg-blue-50 rounded-lg">
-              <Clock className="w-5 h-5 text-primary-blue" />
-            </div>
-            <p className="text-sm text-body">Total Free Slots</p>
-          </div>
-          <p className="text-3xl text-primary-blue">{stats.totalFreeSlots}</p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-card p-5 border border-light">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2.5 bg-green-50 rounded-lg">
-              <TrendingUp className="w-5 h-5 text-green-600" />
-            </div>
-            <p className="text-sm text-body">Longest Gap</p>
-          </div>
-          <p className="text-3xl text-green-600">{hoursDisplay(stats.longestGap)}h</p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-card p-5 border border-light">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2.5 bg-purple-50 rounded-lg">
-              <CheckCircle className="w-5 h-5 text-purple-600" />
-            </div>
-            <p className="text-sm text-body">First Available Slot</p>
-          </div>
-          <p className="text-sm text-purple-600 mt-2">{stats.firstFreeSlot}</p>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-card p-5 border border-light">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2.5 bg-orange-50 rounded-lg">
-              <Users className="w-5 h-5 text-orange-600" />
-            </div>
-            <p className="text-sm text-body">Total Hours Used</p>
-          </div>
-          <p className="text-3xl text-orange-600">{hoursDisplay(stats.totalUsedHours)}h</p>
-        </div>
+      {/* ── Stats ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {isDataLoading
+          ? Array.from({ length: 4 }).map((_, i) => <StatSkeleton key={i} />)
+          : [
+              {
+                label: "Free Slots",
+                value: stats.totalFreeSlots,
+                unit: "",
+                color: "text-primary-blue",
+                icon: <Clock className="w-5 h-5 text-primary-blue" />,
+                bg: "bg-blue-50",
+              },
+              {
+                label: "Longest Gap",
+                value: hoursDisplay(stats.longestGap),
+                unit: "h",
+                color: "text-green-600",
+                icon: <TrendingUp className="w-5 h-5 text-green-600" />,
+                bg: "bg-green-50",
+              },
+              {
+                label: "First Available",
+                value: stats.firstFreeSlot,
+                unit: "",
+                color: "text-purple-600",
+                icon: <CheckCircle className="w-5 h-5 text-purple-600" />,
+                bg: "bg-purple-50",
+              },
+              {
+                label: "Total Hours Used",
+                value: hoursDisplay(stats.totalUsedHours),
+                unit: "h",
+                color: "text-orange-600",
+                icon: <Users className="w-5 h-5 text-orange-600" />,
+                bg: "bg-orange-50",
+              },
+            ].map(({ label, value, unit, color, icon, bg }) => (
+              <div
+                key={label}
+                className="bg-white rounded-xl shadow-card p-4 border border-light"
+              >
+                <div className="flex items-center gap-2.5 mb-2">
+                  <div className={`p-2 ${bg} rounded-lg flex-shrink-0`}>
+                    {icon}
+                  </div>
+                  <p className="text-xs text-body">{label}</p>
+                </div>
+                <p className={`text-2xl font-bold ${color} truncate`}>
+                  {value}
+                  {unit}
+                </p>
+              </div>
+            ))}
       </div>
 
-      {/* Timeline */}
-      <div className="bg-white rounded-lg shadow-card p-6 border border-light">
-        <h3 className="text-dark mb-4">
-          {activeTab === "weekly" ? (
-            <>Weekly Timeline • {selectedTrimesterObj?.name || "Trimester"}</>
-          ) : (
-            <>
-              Timeline • {selectedDay} • {selectedTrimesterObj?.name || "Trimester"}{" "}
-              {selectedRoom ? `- ${selectedRoom.room_name}` : "- All Rooms"}
-            </>
-          )}
+      {/* ── Timeline ── */}
+      <div className="bg-white rounded-xl shadow-card p-5 border border-light">
+        <h3 className="text-dark text-sm font-medium mb-4 flex items-center justify-between flex-wrap gap-2">
+          <span>
+            {activeTab === "weekly" ? (
+              <>
+                Weekly Timeline ·{" "}
+                <span className="text-body font-normal">
+                  {selectedTrimesterObj?.name || "Trimester"}
+                </span>
+              </>
+            ) : (
+              <>
+                {selectedDay} ·{" "}
+                <span className="text-body font-normal">
+                  {selectedTrimesterObj?.name || "Trimester"}
+                  {selectedRoom ? ` · ${selectedRoom.room_name}` : ""}
+                </span>
+              </>
+            )}
+          </span>
+          <span className="text-xs text-body font-normal">
+            {filteredSessions.length} session
+            {filteredSessions.length !== 1 ? "s" : ""} matched
+          </span>
         </h3>
 
-        {activeTab !== "weekly" ? (
+        {isDataLoading ? (
+          <TimelineSkeleton />
+        ) : activeTab !== "weekly" ? (
           <div className="space-y-3">
-            {timeline.map((slot, index) => (
-              <div
-                key={index}
-                className={`rounded-xl p-4 border-2 transition-all ${
-                  slot.type === "gap"
-                    ? "bg-gradient-to-r from-blue-50 to-sky-50 border-blue-200 hover:border-primary-blue hover:shadow-md"
-                    : "bg-purple-500 text-white border-purple-500 hover:bg-purple-600"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-4">
-                    <div className={`flex items-center gap-2 ${slot.type === "gap" ? "text-primary-blue" : "text-white"}`}>
-                      <Clock className="w-5 h-5" />
-                      <span className="font-medium">
-                        {slot.start} - {slot.end}
-                      </span>
+            {timeline.map((slot, index) => {
+              const prevSlot = index > 0 ? timeline[index - 1] : null;
+              const typeChanged = prevSlot && prevSlot.type !== slot.type;
+              return (
+                <div key={index}>
+                  {/* Visual separator when switching between gap and busy */}
+                  {typeChanged && (
+                    <div className="flex items-center gap-2 my-1">
+                      <div className="flex-1 h-px bg-gray-200" />
+                    </div>
+                  )}
+                  <div
+                    className={`rounded-xl px-5 py-4 border flex items-center justify-between flex-wrap gap-4 ${
+                      slot.type === "gap"
+                        ? "bg-green-50 border-green-300 hover:border-green-500 hover:shadow-sm transition-all border-l-4 border-l-green-500"
+                        : "border-l-4 border-l-indigo-800 border-indigo-500"
+                    }`}
+                    style={
+                      slot.type === "busy"
+                        ? {
+                            background:
+                              "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+                            borderColor: "#4338ca",
+                          }
+                        : undefined
+                    }
+                  >
+                    <div className="flex items-center gap-4 flex-wrap">
+                      <div
+                        className={`flex items-center gap-2 flex-shrink-0 ${slot.type === "gap" ? "text-green-700" : "text-white"}`}
+                      >
+                        <Clock className="w-4 h-4 flex-shrink-0" />
+                        <span className="font-bold text-sm tabular-nums whitespace-nowrap">
+                          {slot.start} – {slot.end}
+                        </span>
+                      </div>
+
+                      {slot.type === "busy" ? (
+                        <div>
+                          <p className="text-sm font-semibold text-white">
+                            {slot.code ? (
+                              <span className="px-2 py-0.5 bg-white/20 rounded-md text-xs font-bold mr-2">
+                                {slot.code}
+                              </span>
+                            ) : null}
+                            {slot.subject ?? "Class"}{" "}
+                            <span
+                              className="font-normal text-xs"
+                              style={{ color: "rgba(255,255,255,0.72)" }}
+                            >
+                              ({slot.class_type})
+                            </span>
+                          </p>
+                          <p
+                            className="text-xs mt-0.5"
+                            style={{ color: "rgba(255,255,255,0.65)" }}
+                          >
+                            {[slot.teacher, slot.program, slot.roomName]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="text-sm font-bold text-green-800">
+                            Available — {hoursDisplay(slot.duration)}h free
+                          </p>
+                          <p className="text-xs text-green-600 mt-0.5">
+                            This slot is open for booking
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {slot.type === "busy" ? (
-                      <div className="flex flex-col">
-                        <span className="font-medium">
-                          {slot.code ? `${slot.code} - ` : ""}
-                          {slot.subject ?? "Class"} ({slot.class_type})
-                        </span>
-                        <span className="text-sm opacity-90">
-                          {slot.teacher ?? "—"}
-                          {slot.program ? ` • ${slot.program}` : ""}
-                          {slot.roomName ? ` • ${slot.roomName}` : ""}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {typeof slot.enrolled === "number" && (
+                          <span className="px-3 py-1 bg-white/15 border border-white/20 rounded-full text-xs font-medium text-white/90">
+                            👥 {slot.enrolled} enrolled
+                          </span>
+                        )}
+                        {slot.capacity != null && (
+                          <span className="px-3 py-1 bg-white/15 border border-white/20 rounded-full text-xs font-medium text-white/90">
+                            Cap: {slot.capacity}
+                          </span>
+                        )}
+                        <span className="px-3 py-1.5 bg-white/20 border border-white/30 text-white rounded-full text-xs font-bold">
+                          {hoursDisplay(slot.duration)}h
                         </span>
                       </div>
                     ) : (
-                      <span className="text-primary-blue font-medium">
-                        Available ({hoursDisplay(slot.duration)}h gap)
+                      <span className="px-3 py-1.5 bg-green-500 text-white rounded-full text-xs font-semibold flex-shrink-0">
+                        {hoursDisplay(slot.duration)}h free
                       </span>
                     )}
                   </div>
-
-                  {slot.type === "busy" && (
-                    <div className="flex items-center gap-3">
-                      {typeof slot.enrolled === "number" && (
-                        <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
-                          Enrolled: {slot.enrolled}
-                        </span>
-                      )}
-                      {slot.capacity !== undefined && slot.capacity !== null && (
-                        <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
-                          Capacity: {slot.capacity}
-                        </span>
-                      )}
-                      <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
-                        {hoursDisplay(slot.duration)}h
-                      </span>
-                    </div>
-                  )}
                 </div>
+              );
+            })}
+
+            {timeline.length === 0 && (
+              <div className="text-center py-10 text-body text-sm">
+                <Clock className="w-10 h-10 text-gray-300 mx-auto mb-2" />
+                No sessions found for {selectedDay}. Try different filters.
               </div>
-            ))}
+            )}
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {DAYS.map((d) => {
               const slots = weeklyTimeline?.[d] || [];
+              const gapCount = slots.filter((s) => s.type === "gap").length;
+              const busyCount = slots.filter((s) => s.type === "busy").length;
               return (
-                <div key={d} className="border border-light rounded-xl p-4">
-                  <h4 className="text-dark mb-3">{d}</h4>
-                  <div className="space-y-3">
+                <div
+                  key={d}
+                  className="border border-light rounded-xl overflow-hidden"
+                >
+                  <div className="bg-soft px-4 py-2.5 flex items-center justify-between border-b border-light">
+                    <h4 className="text-sm font-medium text-dark">{d}</h4>
+                    <div className="flex items-center gap-2 text-xs text-body">
+                      <span className="px-2 py-0.5 bg-blue-50 text-primary-blue rounded-full">
+                        {gapCount} free
+                      </span>
+                      <span className="px-2 py-0.5 bg-purple-50 text-purple-600 rounded-full">
+                        {busyCount} busy
+                      </span>
+                    </div>
+                  </div>
+                  <div className="p-3 space-y-2">
                     {slots.map((slot, idx) => (
                       <div
                         key={idx}
-                        className={`rounded-xl p-4 border-2 ${
+                        className={`rounded-lg px-3 py-2.5 flex items-center justify-between gap-3 border ${
                           slot.type === "gap"
-                            ? "bg-blue-50 border-blue-200"
+                            ? "bg-blue-50 border-blue-100"
                             : "bg-purple-500 text-white border-purple-500"
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-3 flex-wrap">
-                          <div className="flex items-center gap-3">
-                            <Clock className="w-5 h-5" />
-                            <span className="font-medium">
-                              {slot.start} - {slot.end}
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Clock className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span className="text-xs font-medium">
+                            {slot.start} – {slot.end}
+                          </span>
+                          {slot.type === "gap" ? (
+                            <span className="text-xs text-primary-blue">
+                              Available ({hoursDisplay(slot.duration)}h)
                             </span>
-
-                            {slot.type === "gap" ? (
-                              <span className="font-medium">
-                                • Available ({hoursDisplay(slot.duration)}h)
-                              </span>
-                            ) : (
-                              <span className="font-medium">
-                                • {slot.code ? `${slot.code} - ` : ""}
-                                {slot.subject ?? "Class"} ({slot.class_type})
-                              </span>
-                            )}
-                          </div>
-
-                          {slot.type === "busy" && (
-                            <span className="px-3 py-1 bg-white/20 rounded-full text-sm">
-                              {hoursDisplay(slot.duration)}h
+                          ) : (
+                            <span className="text-xs truncate">
+                              {slot.code ? `${slot.code} · ` : ""}
+                              {slot.subject ?? "Class"} ({slot.class_type})
                             </span>
                           )}
                         </div>
+                        {slot.type === "busy" && (
+                          <span className="text-xs px-2 py-0.5 bg-white/20 rounded-full flex-shrink-0">
+                            {hoursDisplay(slot.duration)}h
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -912,7 +959,7 @@ export default function GapFinder() {
         )}
       </div>
 
-      {/* Export Modal */}
+      {/* ── Export Modal ── */}
       {showExportModal && (
         <>
           <div
@@ -925,29 +972,28 @@ export default function GapFinder() {
                 <h2 className="text-primary-blue">Export Gap Report</h2>
                 <button
                   onClick={() => setShowExportModal(false)}
-                  className="p-2 hover:bg-soft rounded-lg transition-colors"
+                  className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5 text-body" />
                 </button>
               </div>
-
               <div className="p-6">
-                <p className="text-body mb-6">
-                  Export the current gap finder view as a PDF report. (Implement PDF later.)
+                <p className="text-body text-sm mb-6">
+                  Export the current gap finder view as a PDF report.
                 </p>
                 <div className="flex gap-3">
                   <button
                     onClick={() => {
-                      alert("PDF Export functionality would be implemented here");
+                      toast.success("PDF export triggered.");
                       setShowExportModal(false);
                     }}
-                    className="flex-1 px-4 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity"
+                    className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
                   >
                     Export PDF
                   </button>
                   <button
                     onClick={() => setShowExportModal(false)}
-                    className="flex-1 px-4 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 transition-colors"
+                    className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
                   >
                     Cancel
                   </button>

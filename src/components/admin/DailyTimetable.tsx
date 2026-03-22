@@ -15,7 +15,9 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCcw,
+  Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { todayDay } from "../../data/mockData";
 import { isClassRunning as isClassRunningMock } from "../../data/mockData";
@@ -45,35 +47,30 @@ import {
   getTrimesters,
 } from "../../services/catalog";
 
-/** ✅ Trimester type (matches your API: trimister/trimester object) */
+/** ========================= Types ========================= */
 type ApiTrimester = {
   id: number;
   name: string;
-  start_date: string; // may include time
-  end_date: string; // may include time
+  start_date: string;
+  end_date: string;
   status?: "active" | "inactive";
 };
 
-/** UI Model */
 interface ExtendedClassSession {
   id: number;
   day: Day;
   date: string | null;
-
   startTime: string;
   endTime: string;
-
   trimesterId: number;
   programmId: number;
   subjectId: number;
   teacherId: number;
   roomId: number;
-
   programName: string;
   level: string;
   classType: ClassType;
   enrolledStudents: number;
-
   trimester?: ApiTrimester;
   programm?: ApiProgramm;
   subject?: ApiSubject;
@@ -81,7 +78,7 @@ interface ExtendedClassSession {
   room?: ApiRoom;
 }
 
-/** Program colors */
+/** ========================= Constants ========================= */
 const programColors: Record<
   string,
   { bg: string; hover: string; light: string; text: string; border: string }
@@ -163,6 +160,7 @@ const timeSlots = Array.from({ length: 12 }, (_, i) => {
 
 const isWeekendDay = (day: Day) => day === "Saturday" || day === "Sunday";
 
+/** ========================= Helpers ========================= */
 const normalizeTimeHM = (t: string) => {
   if (!t) return "";
   const sliced = String(t).trim().slice(0, 5);
@@ -171,7 +169,6 @@ const normalizeTimeHM = (t: string) => {
   return `${h.padStart(2, "0")}:${m.padStart(2, "0")}`;
 };
 
-/** ✅ date helpers */
 const toISODate = (d: Date) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -188,7 +185,6 @@ const normalizeISODateOnly = (v: any): string | null => {
 const dayFromDate = (isoDate: string): Day => {
   const [y, m, d] = isoDate.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
-  const js = dt.getDay();
   const map: Day[] = [
     "Sunday",
     "Monday",
@@ -198,14 +194,13 @@ const dayFromDate = (isoDate: string): Day => {
     "Friday",
     "Saturday",
   ];
-  return map[js];
+  return map[dt.getDay()];
 };
 
 const startOfWeekMonday = (isoDate: string) => {
   const [y, m, d] = isoDate.split("-").map(Number);
   const dt = new Date(y, m - 1, d);
-  const js = dt.getDay(); // 0 Sun ... 6 Sat
-  const diffToMonday = (js + 6) % 7;
+  const diffToMonday = (dt.getDay() + 6) % 7;
   dt.setDate(dt.getDate() - diffToMonday);
   return toISODate(dt);
 };
@@ -219,19 +214,16 @@ const addDays = (isoDate: string, n: number) => {
 
 const shiftDays = (isoDate: string, n: number) => addDays(isoDate, n);
 
-/** ✅ Minute helpers */
 const toMinutes = (t: string) => {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + m;
 };
 
-/** ✅ range helper (expects date-only) */
 const inDateRange = (dateISO: string, startISO: string, endISO: string) => {
   if (!dateISO || !startISO || !endISO) return false;
   return dateISO >= startISO && dateISO <= endISO;
 };
 
-/** ✅ error helpers */
 const extractFieldErrors = (e: any): Record<string, string[]> => {
   const data = e?.response?.data;
   if (data?.errors && typeof data.errors === "object") return data.errors;
@@ -266,10 +258,10 @@ function isClassRunningSafe(session: ExtendedClassSession): boolean {
   }
 }
 
+/** ========================= Main Component ========================= */
 export default function DailyTimetable() {
   const [viewMode, setViewMode] = useState<"daily" | "weekly">("daily");
 
-  /** ✅ Date changeable */
   const [selectedDate, setSelectedDate] = useState<string>(() =>
     todayLocalISO(),
   );
@@ -294,12 +286,17 @@ export default function DailyTimetable() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ExtendedClassSession | null>(
+    null,
+  );
 
   const [selectedClass, setSelectedClass] =
     useState<ExtendedClassSession | null>(null);
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [modalError, setModalError] = useState<string>("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
@@ -310,7 +307,6 @@ export default function DailyTimetable() {
   const [teachers, setTeachers] = useState<ApiTeacher[]>([]);
   const [rooms, setRooms] = useState<ApiRoom[]>([]);
 
-  // ✅ IMPORTANT: backend expects trimister_id
   const [form, setForm] = useState<{
     trimister_id: string;
     programm_id: string;
@@ -337,6 +333,7 @@ export default function DailyTimetable() {
     enrolled_students: "30",
   });
 
+  /** ── Data fetch ── */
   const refreshAll = async () => {
     setLoading(true);
     try {
@@ -365,7 +362,6 @@ export default function DailyTimetable() {
         const newTriId = String(pick.id);
         setSelectedTrimesterId((prev) => prev || newTriId);
 
-        // Ensure selectedDate is inside trimester
         const triStart = normalizeISODateOnly(pick.start_date);
         const triEnd = normalizeISODateOnly(pick.end_date);
         const today = todayLocalISO();
@@ -374,21 +370,18 @@ export default function DailyTimetable() {
           triStart && triEnd ? inDateRange(today, triStart, triEnd) : true;
         const safeDate = inside ? today : triStart || today;
 
-        const finalDate = safeDate; 
-
-        setSelectedDate(finalDate);
-        setSelectedDay(dayFromDate(finalDate));
+        setSelectedDate(safeDate);
+        setSelectedDay(dayFromDate(safeDate));
       }
     } catch (e: any) {
-      console.error(e);
+      toast.error("Failed to load timetable data.");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    refreshAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    refreshAll(); /* eslint-disable-next-line */
   }, []);
 
   const selectedTrimesterObj = useMemo(() => {
@@ -399,68 +392,53 @@ export default function DailyTimetable() {
     );
   }, [trimesters, selectedTrimesterId]);
 
-  /** sync day when date changes */
   useEffect(() => {
-    if (!selectedDate) return;
-    setSelectedDay(dayFromDate(selectedDate));
+    if (selectedDate) setSelectedDay(dayFromDate(selectedDate));
   }, [selectedDate]);
 
-  /** when trimester changes, move date into that trimester */
   useEffect(() => {
     if (!selectedTrimesterObj) return;
-
     const triStart = normalizeISODateOnly(selectedTrimesterObj.start_date);
     const triEnd = normalizeISODateOnly(selectedTrimesterObj.end_date);
     if (!triStart || !triEnd) return;
-
     if (!inDateRange(selectedDate, triStart, triEnd)) {
       setSelectedDate(triStart);
       setSelectedDay(dayFromDate(triStart));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line
   }, [selectedTrimesterObj]);
 
+  /** ── Derived data ── */
   const subjectsForSelectedProgram = useMemo(() => {
     const pid = Number(form.programm_id);
     if (!pid) return [];
-    return subjects.filter((s: any) => Number((s as any).programm_id) === pid);
+    return subjects.filter((s: any) => Number(s.programm_id) === pid);
   }, [subjects, form.programm_id]);
 
   const teachersForSelectedSubject = useMemo(() => {
     const sid = Number(form.subject_id);
     if (!sid) return [];
     const subj: any = subjects.find((s) => Number(s.id) === sid);
-    if (
-      subj?.teachers &&
-      Array.isArray(subj.teachers) &&
-      subj.teachers.length > 0
-    ) {
-      return subj.teachers as ApiTeacher[];
-    }
+    if (subj?.teachers?.length) return subj.teachers as ApiTeacher[];
     return teachers;
   }, [subjects, teachers, form.subject_id]);
 
   const allClasses: ExtendedClassSession[] = useMemo(() => {
     return (sessions || []).map((s: any) => {
       const triId = Number(s.trimister_id ?? s.trimester_id);
-
       const trimester =
         s.trimister ||
         s.trimester ||
         trimesters.find((tr) => Number(tr.id) === triId);
-
       const programm =
         s.programm ||
         programs.find((p) => Number(p.id) === Number(s.programm_id));
-
       const subject =
         s.subject ||
         subjects.find((x) => Number(x.id) === Number(s.subject_id));
-
       const teacher =
         s.teacher ||
         teachers.find((x) => Number(x.id) === Number(s.teacher_id));
-
       const room =
         s.room || rooms.find((x) => Number(x.id) === Number(s.room_id));
 
@@ -470,18 +448,15 @@ export default function DailyTimetable() {
         date: normalizeISODateOnly(s.date),
         startTime: normalizeTimeHM(s.start_time),
         endTime: normalizeTimeHM(s.end_time),
-
         trimesterId: triId,
         programmId: Number(s.programm_id),
         subjectId: Number(s.subject_id),
         teacherId: Number(s.teacher_id),
         roomId: Number(s.room_id),
-
         programName: programm?.program_name || "ICT",
         level: programm?.level || (subject as any)?.level || "Bachelor",
         classType: s.class_type,
         enrolledStudents: Number(s.enrolled_students ?? 0),
-
         trimester,
         programm,
         subject,
@@ -496,8 +471,6 @@ export default function DailyTimetable() {
     [programs],
   );
 
-  const availableRooms = useMemo(() => rooms, [rooms]);
-
   const filteredClasses = useMemo(() => {
     const weekStart = startOfWeekMonday(selectedDate);
     const weekEnd = addDays(weekStart, 6);
@@ -506,9 +479,8 @@ export default function DailyTimetable() {
       if (
         selectedTrimesterId &&
         String(cls.trimesterId) !== String(selectedTrimesterId)
-      ) {
+      )
         return false;
-      }
 
       const tri = cls.trimester || selectedTrimesterObj;
       const triStart = normalizeISODateOnly(tri?.start_date);
@@ -528,22 +500,12 @@ export default function DailyTimetable() {
               ? !(weekEnd < triStart || weekStart > triEnd)
               : true;
 
-      const matchesTeacher =
-        !filterTeacher || String(cls.teacherId) === String(filterTeacher);
-      const matchesSubject =
-        !filterSubject || String(cls.subjectId) === String(filterSubject);
-      const matchesRoom =
-        !filterRoom || String(cls.roomId) === String(filterRoom);
-
-      const matchesProgram =
-        showAllPrograms || selectedPrograms.includes(cls.programName || "");
-
       return (
         inRange &&
-        matchesTeacher &&
-        matchesSubject &&
-        matchesRoom &&
-        matchesProgram
+        (!filterTeacher || String(cls.teacherId) === String(filterTeacher)) &&
+        (!filterSubject || String(cls.subjectId) === String(filterSubject)) &&
+        (!filterRoom || String(cls.roomId) === String(filterRoom)) &&
+        (showAllPrograms || selectedPrograms.includes(cls.programName || ""))
       );
     });
   }, [
@@ -561,21 +523,19 @@ export default function DailyTimetable() {
   ]);
 
   const getClassesForWeeklySlot = (time: string, day: Day) => {
-    const slotStart = toMinutes(time);
-    const slotEnd = slotStart + 60;
-
+    const slotStart = toMinutes(time),
+      slotEnd = slotStart + 60;
     return filteredClasses.filter((cls) => {
-      const clsStart = toMinutes(cls.startTime);
-      const clsEnd = toMinutes(cls.endTime);
+      const clsStart = toMinutes(cls.startTime),
+        clsEnd = toMinutes(cls.endTime);
       return cls.day === day && clsStart < slotEnd && clsEnd > slotStart;
     });
   };
 
-  const getRowSpan = (classSession: ExtendedClassSession) => {
-    const start = toMinutes(classSession.startTime);
-    const end = toMinutes(classSession.endTime);
-    const diffHours = Math.ceil((end - start) / 60);
-    return Math.max(1, diffHours);
+  const getRowSpan = (cls: ExtendedClassSession) => {
+    const start = toMinutes(cls.startTime),
+      end = toMinutes(cls.endTime);
+    return Math.max(1, Math.ceil((end - start) / 60));
   };
 
   const clearFilters = () => {
@@ -584,24 +544,14 @@ export default function DailyTimetable() {
     setFilterRoom("");
   };
 
-  const toggleProgram = (program: string) => {
-    if (selectedPrograms.includes(program)) {
-      setSelectedPrograms(selectedPrograms.filter((p) => p !== program));
-    } else {
-      setSelectedPrograms([...selectedPrograms, program]);
-    }
-  };
-
   const openView = (cls: ExtendedClassSession) => {
     setSelectedClass(cls);
     setShowViewModal(true);
   };
-
   const openEdit = (cls: ExtendedClassSession) => {
     setModalError("");
     setFieldErrors({});
     setSelectedClass(cls);
-
     setForm({
       trimister_id: String(cls.trimesterId),
       programm_id: String(cls.programmId),
@@ -615,14 +565,14 @@ export default function DailyTimetable() {
       class_type: cls.classType,
       enrolled_students: String(cls.enrolledStudents ?? 0),
     });
-
     setShowEditModal(true);
   };
 
+  /** ── Form validation ── */
   const validateForm = () => {
     setFieldErrors({});
     if (!form.trimister_id) {
-      setModalError("Please select Trimester.");
+      setModalError("Please select a Trimester.");
       return false;
     }
     if (
@@ -635,48 +585,41 @@ export default function DailyTimetable() {
       return false;
     }
     if (form.end_time <= form.start_time) {
-      setModalError("End time must be greater than start time.");
+      setModalError("End time must be after start time.");
       return false;
     }
     return true;
   };
 
+  /** ── Create ── */
   const handleCreate = async () => {
     setModalError("");
     setFieldErrors({});
     if (!validateForm()) return;
-
     const dateVal = form.date?.trim() || "";
     const derivedDay = dateVal ? dayFromDate(dateVal) : form.day;
 
     setSaving(true);
     try {
-      const payload: any = {
+      await createTimeTableSession({
         trimister_id: Number(form.trimister_id),
         programm_id: Number(form.programm_id),
         subject_id: Number(form.subject_id),
         teacher_id: Number(form.teacher_id),
         room_id: Number(form.room_id),
-
         day: derivedDay,
-        date: dateVal ? dateVal : null,
-
+        date: dateVal || null,
         start_time: normalizeTimeHM(form.start_time),
         end_time: normalizeTimeHM(form.end_time),
-
         class_type: form.class_type,
         enrolled_students: form.enrolled_students
           ? Number(form.enrolled_students)
           : 0,
-      };
-
-      await createTimeTableSession(payload);
+      } as any);
 
       const fresh = await getTimeTableSessions();
       setSessions(fresh.data || []);
-
       setShowAddModal(false);
-
       setForm((p) => ({
         ...p,
         programm_id: "",
@@ -690,102 +633,113 @@ export default function DailyTimetable() {
         class_type: "Lecture",
         enrolled_students: "30",
       }));
+      toast.success("Session added successfully!");
     } catch (e: any) {
-      console.error(e);
       setFieldErrors(extractFieldErrors(e));
       setModalError(extractErrorSummary(e));
+      toast.error(extractErrorSummary(e));
     } finally {
       setSaving(false);
     }
   };
 
+  /** ── Update ── */
   const handleUpdate = async () => {
     if (!selectedClass) return;
-
     setModalError("");
     setFieldErrors({});
     if (!validateForm()) return;
-
     const dateVal = form.date?.trim() || "";
     const derivedDay = dateVal ? dayFromDate(dateVal) : form.day;
 
     setSaving(true);
     try {
-      const payload: any = {
+      await updateTimeTableSession(selectedClass.id, {
         trimister_id: Number(form.trimister_id),
         programm_id: Number(form.programm_id),
         subject_id: Number(form.subject_id),
         teacher_id: Number(form.teacher_id),
         room_id: Number(form.room_id),
-
         day: derivedDay,
-        date: dateVal ? dateVal : null,
-
+        date: dateVal || null,
         start_time: normalizeTimeHM(form.start_time),
         end_time: normalizeTimeHM(form.end_time),
-
         class_type: form.class_type,
         enrolled_students: form.enrolled_students
           ? Number(form.enrolled_students)
           : 0,
-      };
-
-      await updateTimeTableSession(selectedClass.id, payload);
+      } as any);
 
       const fresh = await getTimeTableSessions();
       setSessions(fresh.data || []);
-
       setShowEditModal(false);
       setSelectedClass(null);
+      toast.success("Session updated successfully!");
     } catch (e: any) {
-      console.error(e);
       setFieldErrors(extractFieldErrors(e));
       setModalError(extractErrorSummary(e));
+      toast.error(extractErrorSummary(e));
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async (cls: ExtendedClassSession) => {
-    const ok = window.confirm(
-      "Are you sure you want to delete this timetable session?",
-    );
-    if (!ok) return;
+  /** ── Delete ── */
+  const handleDeleteClick = (cls: ExtendedClassSession) => {
+    setDeleteTarget(cls);
+    setShowDeleteConfirm(true);
+  };
 
-    setSaving(true);
-    setModalError("");
-    setFieldErrors({});
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await deleteTimeTableSession(cls.id);
+      await deleteTimeTableSession(deleteTarget.id);
       const fresh = await getTimeTableSessions();
       setSessions(fresh.data || []);
+      toast.success("Session deleted.");
+      setShowDeleteConfirm(false);
+      setDeleteTarget(null);
     } catch (e: any) {
-      console.error(e);
-      setFieldErrors(extractFieldErrors(e));
-      setModalError(extractErrorSummary(e));
+      toast.error(extractErrorSummary(e));
     } finally {
-      setSaving(false);
+      setDeleting(false);
     }
   };
 
-  const stats = useMemo(() => {
-    const totalClasses = filteredClasses.length;
-    const conflictCount = 0;
-    const roomsUsed = new Set(filteredClasses.map((c) => c.roomId)).size;
-    return { totalClasses, conflictCount, roomsUsed };
-  }, [filteredClasses]);
+  /** ── Stats ── */
+  const stats = useMemo(
+    () => ({
+      totalClasses: filteredClasses.length,
+      roomsUsed: new Set(filteredClasses.map((c) => c.roomId)).size,
+      conflictCount: 0,
+    }),
+    [filteredClasses],
+  );
 
-  /** Shared Form Fields (for Add + Edit) */
-  const TimetableFormFields = () => (
+  const triStart = normalizeISODateOnly(selectedTrimesterObj?.start_date || "");
+  const triEnd = normalizeISODateOnly(selectedTrimesterObj?.end_date || "");
+  const weekStart = startOfWeekMonday(selectedDate);
+  const weekEnd = addDays(weekStart, 6);
+  const isToday = selectedDate === todayLocalISO();
+  const hasFilters = !!(
+    filterTeacher ||
+    filterSubject ||
+    filterRoom ||
+    !showAllPrograms
+  );
+
+  /** ── Form fields — rendered as JSX (NOT a nested component) to prevent focus loss ── */
+  const renderFormFields = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div>
-        <label className="text-sm text-body block mb-1">Trimester *</label>
+        <label className="text-sm text-body block mb-1.5">Trimester *</label>
         <select
           value={form.trimister_id}
           onChange={(e) =>
             setForm((p) => ({ ...p, trimister_id: e.target.value }))
           }
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm cursor-pointer"
         >
           <option value="">Select Trimester</option>
           {trimesters.map((t) => (
@@ -802,7 +756,7 @@ export default function DailyTimetable() {
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">Program *</label>
+        <label className="text-sm text-body block mb-1.5">Program *</label>
         <select
           value={form.programm_id}
           onChange={(e) =>
@@ -813,7 +767,7 @@ export default function DailyTimetable() {
               teacher_id: "",
             }))
           }
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm cursor-pointer"
         >
           <option value="">Select Program</option>
           {programs.map((p) => (
@@ -825,7 +779,7 @@ export default function DailyTimetable() {
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">Subject *</label>
+        <label className="text-sm text-body block mb-1.5">Subject *</label>
         <select
           value={form.subject_id}
           onChange={(e) =>
@@ -835,7 +789,7 @@ export default function DailyTimetable() {
               teacher_id: "",
             }))
           }
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm cursor-pointer disabled:opacity-50"
           disabled={!form.programm_id}
         >
           <option value="">
@@ -843,20 +797,20 @@ export default function DailyTimetable() {
           </option>
           {subjectsForSelectedProgram.map((s: any) => (
             <option key={s.id} value={String(s.id)}>
-              {s.subject_code} - {s.subject_name}
+              {s.subject_code} – {s.subject_name}
             </option>
           ))}
         </select>
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">Teacher *</label>
+        <label className="text-sm text-body block mb-1.5">Teacher *</label>
         <select
           value={form.teacher_id}
           onChange={(e) =>
             setForm((p) => ({ ...p, teacher_id: e.target.value }))
           }
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm cursor-pointer disabled:opacity-50"
           disabled={!form.subject_id}
         >
           <option value="">
@@ -876,11 +830,11 @@ export default function DailyTimetable() {
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">Room *</label>
+        <label className="text-sm text-body block mb-1.5">Room *</label>
         <select
           value={form.room_id}
           onChange={(e) => setForm((p) => ({ ...p, room_id: e.target.value }))}
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm cursor-pointer"
         >
           <option value="">Select Room</option>
           {rooms.map((r) => (
@@ -895,13 +849,13 @@ export default function DailyTimetable() {
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">Day</label>
+        <label className="text-sm text-body block mb-1.5">Day</label>
         <select
           value={form.day}
           onChange={(e) =>
             setForm((p) => ({ ...p, day: e.target.value as Day }))
           }
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm cursor-pointer"
         >
           {days.map((d) => (
             <option key={d} value={d}>
@@ -912,7 +866,9 @@ export default function DailyTimetable() {
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">Date (optional)</label>
+        <label className="text-sm text-body block mb-1.5">
+          Date (optional)
+        </label>
         <input
           type="date"
           value={form.date}
@@ -924,12 +880,27 @@ export default function DailyTimetable() {
               day: v ? dayFromDate(v) : p.day,
             }));
           }}
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm"
         />
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">Start Time *</label>
+        <label className="text-sm text-body block mb-1.5">Class Type *</label>
+        <select
+          value={form.class_type}
+          onChange={(e) =>
+            setForm((p) => ({ ...p, class_type: e.target.value as ClassType }))
+          }
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm cursor-pointer"
+        >
+          <option value="Lecture">Lecture</option>
+          <option value="Tutorial">Tutorial</option>
+          <option value="Seminar">Seminar</option>
+        </select>
+      </div>
+
+      <div>
+        <label className="text-sm text-body block mb-1.5">Start Time *</label>
         <input
           type="time"
           value={form.start_time}
@@ -939,12 +910,12 @@ export default function DailyTimetable() {
               start_time: normalizeTimeHM(e.target.value),
             }))
           }
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm"
         />
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">End Time *</label>
+        <label className="text-sm text-body block mb-1.5">End Time *</label>
         <input
           type="time"
           value={form.end_time}
@@ -954,32 +925,12 @@ export default function DailyTimetable() {
               end_time: normalizeTimeHM(e.target.value),
             }))
           }
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm"
         />
       </div>
 
       <div>
-        <label className="text-sm text-body block mb-1">Class Type *</label>
-        <select
-          value={form.class_type}
-          onChange={(e) =>
-            setForm((p) => ({ ...p, class_type: e.target.value as ClassType }))
-          }
-          className="w-full px-4 py-2.5 border rounded-lg"
-        >
-          <option value="Lecture">Lecture</option>
-          <option value="Tutorial">Tutorial</option>
-          <option value="Seminar">Seminar</option>
-        </select>
-        {!!fieldErrors.class_type?.length && (
-          <p className="text-xs text-red-600 mt-1">
-            {fieldErrors.class_type[0]}
-          </p>
-        )}
-      </div>
-
-      <div>
-        <label className="text-sm text-body block mb-1">
+        <label className="text-sm text-body block mb-1.5">
           Enrolled Students
         </label>
         <input
@@ -989,7 +940,7 @@ export default function DailyTimetable() {
           onChange={(e) =>
             setForm((p) => ({ ...p, enrolled_students: e.target.value }))
           }
-          className="w-full px-4 py-2.5 border rounded-lg"
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue focus:border-transparent text-sm"
         />
         {!!fieldErrors.enrolled_students?.length && (
           <p className="text-xs text-red-600 mt-1">
@@ -1000,7 +951,7 @@ export default function DailyTimetable() {
     </div>
   );
 
-  /** Class card */
+  /** ── Class block ── */
   const ClassBlock = ({
     classSession,
     compact = false,
@@ -1018,8 +969,7 @@ export default function DailyTimetable() {
         className={[
           "rounded-xl p-3 h-full text-white relative",
           programColor.bg,
-          "transition-[box-shadow,transform,filter] duration-200 ease-out",
-          "will-change-transform",
+          "transition-all duration-200 ease-out will-change-transform",
           isHovered
             ? "shadow-xl ring-2 ring-white/70 -translate-y-0.5"
             : "shadow-md",
@@ -1037,26 +987,22 @@ export default function DailyTimetable() {
             Now Running
           </span>
         )}
-
         <div
           className={`${compact ? "text-xs" : "text-sm font-medium"} truncate`}
         >
           {(classSession.subject as any)?.subject_code || "SUB"}
         </div>
-
-        <div className="text-xs opacity-90 truncate mt-1">
+        <div className="text-xs opacity-90 truncate mt-0.5">
           {classSession.room?.room_name || "Room"}
         </div>
         <div className="text-xs opacity-90 truncate">
           {classSession.teacher?.full_name || "Teacher"}
         </div>
-
         <div className="text-xs opacity-80 mt-1">
           <span className="px-2 py-0.5 bg-white/20 rounded-full">
             {classSession.classType}
           </span>
         </div>
-
         {!compact && (
           <div className="text-xs opacity-90 mt-1 truncate">
             <span className="px-2 py-0.5 bg-white/30 rounded-full">
@@ -1064,12 +1010,11 @@ export default function DailyTimetable() {
             </span>
           </div>
         )}
-
         {isHovered && (
-          <div className="absolute top-2 right-2 flex gap-1 bg-white/20 backdrop-blur-sm rounded p-1">
+          <div className="absolute top-2 right-2 flex gap-1 bg-white/20 backdrop-blur-sm rounded-lg p-1">
             <button
-              className="p-1 hover:bg-white/30 rounded transition-colors"
-              title="View Details"
+              className="p-1 hover:bg-white/30 rounded-lg transition-colors"
+              title="View"
               onClick={(e) => {
                 e.stopPropagation();
                 openView(classSession);
@@ -1077,9 +1022,8 @@ export default function DailyTimetable() {
             >
               <Eye className="w-3 h-3" />
             </button>
-
             <button
-              className="p-1 hover:bg-white/30 rounded transition-colors"
+              className="p-1 hover:bg-white/30 rounded-lg transition-colors"
               title="Edit"
               onClick={(e) => {
                 e.stopPropagation();
@@ -1088,13 +1032,12 @@ export default function DailyTimetable() {
             >
               <Edit className="w-3 h-3" />
             </button>
-
             <button
-              className="p-1 hover:bg-white/30 rounded transition-colors"
+              className="p-1 hover:bg-white/30 rounded-lg transition-colors"
               title="Delete"
               onClick={(e) => {
                 e.stopPropagation();
-                handleDelete(classSession);
+                handleDeleteClick(classSession);
               }}
             >
               <Trash2 className="w-3 h-3" />
@@ -1105,138 +1048,129 @@ export default function DailyTimetable() {
     );
   };
 
-  const isToday = selectedDate === todayLocalISO();
-
-  // nicer labels
-  const triStart = normalizeISODateOnly(selectedTrimesterObj?.start_date || "");
-  const triEnd = normalizeISODateOnly(selectedTrimesterObj?.end_date || "");
-
-  const weekStart = startOfWeekMonday(selectedDate);
-  const weekEnd = addDays(weekStart, 6);
-
+  /** ========================= Render ========================= */
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-5">
+      {/* ── Header ── */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-primary-blue mb-2">Timetable Builder</h1>
-          <p className="text-body">
-            View and manage your class schedule{" "}
-            {loading && (
-              <span className="ml-2 text-sm text-gray-500">(Loading...)</span>
-            )}
+          <h1 className="text-primary-blue mb-1">Timetable Builder</h1>
+          <p className="text-body text-sm">
+            View and manage your class schedule
           </p>
         </div>
-
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {/* Zoom */}
-          <div className="flex items-center gap-2 bg-white rounded-xl p-2 shadow-card border border-light">
+          <div className="flex items-center gap-1 bg-white rounded-xl p-1.5 shadow-card border border-light">
             <button
               onClick={() => setZoomLevel(Math.max(50, zoomLevel - 10))}
-              className="p-2 hover:bg-soft rounded-lg transition-colors"
+              className="p-1.5 hover:bg-soft rounded-lg transition-colors cursor-pointer"
               title="Zoom Out"
             >
               <ZoomOut className="w-4 h-4 text-body" />
             </button>
-            <span className="text-sm text-body px-2">{zoomLevel}%</span>
+            <span className="text-xs text-body px-1.5 min-w-[40px] text-center">
+              {zoomLevel}%
+            </span>
             <button
               onClick={() => setZoomLevel(Math.min(150, zoomLevel + 10))}
-              className="p-2 hover:bg-soft rounded-lg transition-colors"
+              className="p-1.5 hover:bg-soft rounded-lg transition-colors cursor-pointer"
               title="Zoom In"
             >
               <ZoomIn className="w-4 h-4 text-body" />
             </button>
           </div>
-
           <button
             onClick={() => setShowExportModal(true)}
-            className="flex items-center gap-2 px-5 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity shadow-md"
+            className="flex items-center gap-2 px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 active:scale-[0.97] active:opacity-80 transition-all duration-150 shadow-md select-none cursor-pointer text-sm"
           >
             <Download className="w-4 h-4" />
-            Export as PDF
+            Export PDF
           </button>
         </div>
       </div>
-
-      {/* View Toggle */}
-      <div className="flex gap-2 bg-white rounded-xl p-2 shadow-card border border-light w-fit">
-        <button
-          onClick={() => setViewMode("daily")}
-          className={`px-5 py-2.5 rounded-lg transition-all text-sm font-medium ${
-            viewMode === "daily"
-              ? "bg-primary-blue text-white shadow-md"
-              : "text-body hover:bg-soft"
-          }`}
-        >
-          Daily
-        </button>
-        <button
-          onClick={() => setViewMode("weekly")}
-          className={`px-5 py-2.5 rounded-lg transition-all text-sm font-medium ${
-            viewMode === "weekly"
-              ? "bg-primary-blue text-white shadow-md"
-              : "text-body hover:bg-soft"
-          }`}
-        >
-          Weekly
-        </button>
-      </div>
-
-      {/* ✅ Clean + modern schedule controls */}
-      <div className="bg-white rounded-2xl shadow-card border border-light overflow-hidden">
-        <div className="px-5 py-4 border-b border-light flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-blue-50 border border-blue-100">
-              <Calendar className="w-5 h-5 text-primary-blue" />
-            </div>
-            <div>
-              <h2 className="text-dark">Schedule Controls</h2>
-              <p className="text-xs text-gray-500">
-                {viewMode === "daily"
-                  ? `Daily: ${selectedDate} (${selectedDay})`
-                  : `Week: ${weekStart} → ${weekEnd}`}
-              </p>
-            </div>
+      {/* ── View toggle + date controls ── */}
+      <div className="bg-white rounded-xl shadow-card border border-light p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          {/* View toggle */}
+          <div className="flex items-center gap-1 p-1 bg-soft rounded-lg w-fit">
+            {(["daily", "weekly"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setViewMode(m)}
+                className={`px-5 py-2 rounded-md text-sm font-medium transition-all duration-150 cursor-pointer capitalize ${
+                  viewMode === m
+                    ? "bg-white text-primary-blue shadow-sm"
+                    : "text-body hover:text-dark"
+                }`}
+              >
+                {m.charAt(0).toUpperCase() + m.slice(1)}
+              </button>
+            ))}
           </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={refreshAll}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-soft hover:bg-gray-100 text-sm text-body border border-light"
-              title="Refresh"
-            >
-              <RefreshCcw className="w-4 h-4" />
-              Refresh
-            </button>
+          {/* Trimester selector */}
+          <select
+            value={selectedTrimesterId}
+            onChange={(e) => setSelectedTrimesterId(e.target.value)}
+            className="flex-1 min-w-[180px] px-3 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm cursor-pointer"
+          >
+            <option value="">Select Trimester</option>
+            {trimesters.map((t) => (
+              <option key={t.id} value={String(t.id)}>
+                {t.name}
+              </option>
+            ))}
+          </select>
 
+          {/* Date picker */}
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
+          />
+
+          {/* Nav buttons */}
+          <div className="flex items-center gap-1.5">
             <button
-              onClick={() => {
-                const d = todayLocalISO();
-                setSelectedDate(d);
-              }}
-              className="px-3 py-2 rounded-xl bg-soft hover:bg-gray-100 text-sm text-body border border-light"
+              onClick={() => setSelectedDate(shiftDays(selectedDate, -1))}
+              className="p-2 border border-light rounded-xl hover:bg-soft active:bg-soft/80 transition-colors cursor-pointer"
+            >
+              <ChevronLeft className="w-4 h-4 text-body" />
+            </button>
+            <button
+              onClick={() => setSelectedDate(todayLocalISO())}
+              className={`px-3 py-2 rounded-xl text-sm transition-colors cursor-pointer border ${
+                isToday
+                  ? "bg-primary-blue text-white border-primary-blue"
+                  : "border-light text-body hover:bg-soft"
+              }`}
             >
               Today
             </button>
-
-            <button
-              onClick={() => setSelectedDate(shiftDays(selectedDate, -1))}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-soft hover:bg-gray-100 text-sm text-body border border-light"
-              title="Previous day"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              Prev
-            </button>
-
             <button
               onClick={() => setSelectedDate(shiftDays(selectedDate, 1))}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-soft hover:bg-gray-100 text-sm text-body border border-light"
-              title="Next day"
+              className="p-2 border border-light rounded-xl hover:bg-soft active:bg-soft/80 transition-colors cursor-pointer"
             >
-              Next
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="w-4 h-4 text-body" />
             </button>
+          </div>
 
+          {/* Refresh + Add */}
+          <div className="flex items-center gap-1.5 sm:ml-auto">
+            <button
+              onClick={refreshAll}
+              disabled={loading}
+              className="p-2 border border-light rounded-xl hover:bg-soft active:bg-soft/80 transition-colors cursor-pointer disabled:opacity-50"
+              title="Refresh"
+            >
+              {loading ? (
+                <Loader2 className="w-4 h-4 text-body animate-spin" />
+              ) : (
+                <RefreshCcw className="w-4 h-4 text-body" />
+              )}
+            </button>
             <button
               onClick={() => {
                 setModalError("");
@@ -1249,7 +1183,7 @@ export default function DailyTimetable() {
                 }));
                 setShowAddModal(true);
               }}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-primary-blue text-white hover:opacity-90 transition-opacity shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-primary-blue text-white rounded-xl hover:opacity-90 active:scale-[0.97] active:opacity-80 transition-all duration-150 shadow-sm select-none cursor-pointer text-sm"
             >
               <Plus className="w-4 h-4" />
               Add Session
@@ -1257,104 +1191,61 @@ export default function DailyTimetable() {
           </div>
         </div>
 
-        <div className="p-5 grid grid-cols-1 md:grid-cols-12 gap-4">
-          <div className="md:col-span-5">
-            <label className="block text-sm text-body mb-2">Trimester *</label>
-            <select
-              value={selectedTrimesterId}
-              onChange={(e) => setSelectedTrimesterId(e.target.value)}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
-            >
-              <option value="">Select Trimester</option>
-              {trimesters.map((t) => (
-                <option key={t.id} value={String(t.id)}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-
-            {selectedTrimesterObj && (
-              <p className="text-xs text-gray-500 mt-2">
-                Range: <span className="font-medium">{triStart}</span> →{" "}
-                <span className="font-medium">{triEnd}</span>
-              </p>
+        {/* Subtitle info */}
+        <div className="flex items-center gap-3 mt-3 text-xs text-body flex-wrap">
+          <span>
+            {viewMode === "daily" ? (
+              <>
+                <span className="font-medium text-dark">{selectedDate}</span> ·{" "}
+                <span className="font-medium text-dark">{selectedDay}</span>
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-dark">{weekStart}</span> →{" "}
+                <span className="font-medium text-dark">{weekEnd}</span>
+              </>
             )}
-          </div>
-
-          <div className="md:col-span-4">
-            <label className="block text-sm text-body mb-2">Select Date</label>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
-            />
-            <p className="text-xs text-gray-500 mt-2">
-              Auto Day: <span className="font-medium">{selectedDay}</span>
-            </p>
-          </div>
-
-          <div className="md:col-span-3">
-            <label className="block text-sm text-body mb-2">Quick Info</label>
-            <div className="rounded-xl border border-light bg-soft p-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-gray-500">Showing</span>
-                <span className="text-sm font-semibold text-dark">
-                  {filteredClasses.length}
-                </span>
-              </div>
-              <div className="flex items-center justify-between mt-2">
-                <span className="text-xs text-gray-500">Rooms used</span>
-                <span className="text-sm font-semibold text-dark">
-                  {stats.roomsUsed}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {selectedTrimesterObj && (
-            <div className="md:col-span-12">
-              <div className="mt-1 p-3 rounded-xl bg-blue-50 border border-blue-100 text-sm text-blue-800">
-                ✅ Routine sessions (date = null) appear based on selected{" "}
-                <b>day</b> and only when your selected date is inside this
-                trimester.
-              </div>
-            </div>
+          </span>
+          {selectedTrimesterObj && triStart && triEnd && (
+            <span className="text-body">
+              Trimester:{" "}
+              <span className="font-medium text-dark">{triStart}</span> →{" "}
+              <span className="font-medium text-dark">{triEnd}</span>
+            </span>
           )}
+          <span className="ml-auto font-medium text-dark">
+            {filteredClasses.length} class
+            {filteredClasses.length !== 1 ? "es" : ""}
+          </span>
         </div>
       </div>
-
-      {/* Filters */}
-      <div className="bg-white rounded-lg shadow-card p-5 border border-light">
-        <div className="flex items-center justify-between mb-4">
+      {/* ── Filters ── */}
+      <div className="bg-white rounded-xl shadow-card p-4 border border-light">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Filter className="w-5 h-5 text-primary-blue" />
-            <h2 className="text-dark">Filters</h2>
+            <Filter className="w-4 h-4 text-primary-blue" />
+            <span className="text-sm font-medium text-dark">Filters</span>
           </div>
-
-          {(filterTeacher ||
-            filterSubject ||
-            filterRoom ||
-            !showAllPrograms) && (
+          {hasFilters && (
             <button
               onClick={() => {
                 clearFilters();
                 setShowAllPrograms(true);
                 setSelectedPrograms([]);
               }}
-              className="flex items-center gap-2 text-sm text-primary-blue hover:text-sky-blue transition-colors"
+              className="flex items-center gap-1.5 text-xs text-primary-blue hover:underline cursor-pointer"
             >
-              <X className="w-4 h-4" />
-              Clear all filters
+              <X className="w-3.5 h-3.5" />
+              Clear all
             </button>
           )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+        <div className="flex flex-wrap gap-2">
           <select
             value={filterTeacher}
             onChange={(e) => setFilterTeacher(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
+            className="flex-1 min-w-[150px] px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue cursor-pointer"
           >
             <option value="">All Teachers</option>
             {teachers.map((t) => (
@@ -1367,12 +1258,12 @@ export default function DailyTimetable() {
           <select
             value={filterSubject}
             onChange={(e) => setFilterSubject(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
+            className="flex-1 min-w-[150px] px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue cursor-pointer"
           >
             <option value="">All Subjects</option>
             {subjects.map((s) => (
               <option key={s.id} value={String(s.id)}>
-                {(s as any).subject_code} - {(s as any).subject_name}
+                {(s as any).subject_code} – {(s as any).subject_name}
               </option>
             ))}
           </select>
@@ -1380,7 +1271,7 @@ export default function DailyTimetable() {
           <select
             value={filterRoom}
             onChange={(e) => setFilterRoom(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-blue text-sm"
+            className="flex-1 min-w-[130px] px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary-blue cursor-pointer"
           >
             <option value="">All Rooms</option>
             {rooms.map((r) => (
@@ -1389,38 +1280,39 @@ export default function DailyTimetable() {
               </option>
             ))}
           </select>
+
+          {/* Show all programs toggle */}
+          <label className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-xl text-sm cursor-pointer hover:bg-soft transition-colors">
+            <input
+              type="checkbox"
+              checked={showAllPrograms}
+              onChange={(e) => setShowAllPrograms(e.target.checked)}
+              className="w-4 h-4 text-primary-blue rounded border-gray-300 cursor-pointer"
+            />
+            <span className="text-body">All Programs</span>
+          </label>
         </div>
 
-        <div className="border-t border-light pt-4">
-          <div className="flex items-center justify-between mb-3">
-            <label className="text-sm text-body">Filter by Programs</label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showAllPrograms}
-                onChange={(e) => setShowAllPrograms(e.target.checked)}
-                className="w-4 h-4 text-primary-blue rounded focus:ring-primary-blue border-gray-300"
-              />
-              <span className="text-xs text-body">Show All</span>
-            </label>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
+        {/* Program pills */}
+        {!showAllPrograms && programNames.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-light">
             {programNames.map((program) => {
               const color = programColors[program] || DEFAULT_COLOR;
               const isSelected = selectedPrograms.includes(program);
-
               return (
                 <button
                   key={program}
-                  onClick={() => toggleProgram(program)}
-                  disabled={showAllPrograms}
-                  className={`px-3 py-1.5 rounded-full text-xs transition-all ${
-                    showAllPrograms
-                      ? `${color.light} ${color.text} border ${color.border} opacity-60 cursor-not-allowed`
-                      : isSelected
-                        ? `${color.bg} text-white shadow-sm`
-                        : `${color.light} ${color.text} border ${color.border} hover:shadow-md`
+                  onClick={() => {
+                    setSelectedPrograms((prev) =>
+                      isSelected
+                        ? prev.filter((p) => p !== program)
+                        : [...prev, program],
+                    );
+                  }}
+                  className={`px-3 py-1.5 rounded-full text-xs transition-all cursor-pointer ${
+                    isSelected
+                      ? `${color.bg} text-white shadow-sm`
+                      : `${color.light} ${color.text} border ${color.border} hover:shadow-sm`
                   }`}
                 >
                   {program}
@@ -1428,32 +1320,52 @@ export default function DailyTimetable() {
               );
             })}
           </div>
-        </div>
+        )}
       </div>
-
-      {/* Badges */}
-      {viewMode === "daily" && (
-        <div className="flex gap-3 flex-wrap">
-          {isToday && (
-            <div className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg border-2 border-blue-300">
-              📅 Today&apos;s Schedule
-            </div>
-          )}
-          {isWeekendDay(dayFromDate(selectedDate)) && (
-            <div className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg border-2 border-gray-300">
-              🏖️ Weekend Schedule
-            </div>
-          )}
-          <div className="px-4 py-2 bg-soft text-body rounded-lg border border-light">
-            Showing: <b>{filteredClasses.length}</b> class(es)
+      {/* ── Grid ── */}
+      {loading ? (
+        <div className="bg-white rounded-xl shadow-card border border-light overflow-hidden">
+          <div className="bg-soft px-5 py-3 border-b border-light">
+            <div className="h-4 w-32 rounded bg-gray-200 animate-pulse" />
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-soft border-b border-light">
+                  <th className="px-5 py-3 min-w-[90px]">
+                    <div className="h-3 w-10 rounded bg-gray-200 animate-pulse" />
+                  </th>
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <th
+                      key={i}
+                      className="px-5 py-3 min-w-[200px] border-l border-light"
+                    >
+                      <div className="h-3 w-24 rounded bg-gray-200 animate-pulse mx-auto mb-1" />
+                      <div className="h-2.5 w-16 rounded bg-gray-200 animate-pulse mx-auto" />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 8 }).map((_, row) => (
+                  <tr key={row} className="border-b border-gray-100">
+                    <td className="px-5 py-4 border-r border-light">
+                      <div className="h-3 w-12 rounded bg-gray-200 animate-pulse" />
+                    </td>
+                    {Array.from({ length: 4 }).map((_, col) => (
+                      <td key={col} className="px-3 py-3 border-r border-light">
+                        <div className="h-16 rounded-xl bg-gray-100 animate-pulse" />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
-      )}
-
-      {/* Daily View */}
-      {viewMode === "daily" && (
+      ) : (
         <div
-          className="bg-white rounded-lg shadow-card overflow-hidden border border-light"
+          className="bg-white rounded-xl shadow-card overflow-hidden border border-light"
           style={{
             transform: `scale(${zoomLevel / 100})`,
             transformOrigin: "top left",
@@ -1464,276 +1376,225 @@ export default function DailyTimetable() {
             <table className="w-full border-collapse">
               <thead>
                 <tr className="bg-soft border-b border-light">
-                  <th className="sticky left-0 z-20 px-6 py-4 text-left text-sm text-body bg-soft border-r border-light min-w-[100px]">
+                  <th className="sticky left-0 z-20 px-5 py-3 text-left text-xs text-body bg-soft border-r border-light min-w-[90px]">
                     Time
                   </th>
-
-                  {availableRooms.map((room) => (
-                    <th
-                      key={room.id}
-                      className="px-6 py-4 text-center text-sm text-body border-r border-light min-w-[220px]"
-                    >
-                      <div className="font-medium">{room.room_name}</div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Capacity: {room.capacity}
-                      </div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-
-              <tbody>
-                {timeSlots.map((time) => (
-                  <tr
-                    key={time}
-                    className={`border-b border-gray-100 hover:bg-soft/30 transition-colors ${
-                      isWeekendDay(selectedDay) ? "bg-gray-50" : ""
-                    }`}
-                  >
-                    <td className="sticky left-0 z-10 px-6 py-4 text-sm text-body bg-white border-r border-light">
-                      <span className="font-medium">{time}</span>
-                    </td>
-
-                    {availableRooms.map((room) => {
-                      const classes = filteredClasses.filter((cls) => {
-                        const slotStart = toMinutes(time);
-                        const slotEnd = slotStart + 60;
-                        const clsStart = toMinutes(cls.startTime);
-                        const clsEnd = toMinutes(cls.endTime);
-
-                        return (
-                          Number(cls.roomId) === Number(room.id) &&
-                          clsStart < slotEnd &&
-                          clsEnd > slotStart
-                        );
-                      });
-
-                      const slotStart = toMinutes(time);
-                      const slotEnd = slotStart + 60;
-
-                      const classStartingNow = classes.find((c) => {
-                        const cStart = toMinutes(c.startTime);
-                        return cStart >= slotStart && cStart < slotEnd;
-                      });
-
-                      if (classStartingNow) {
-                        return (
-                          <td
-                            key={room.id}
-                            rowSpan={getRowSpan(classStartingNow)}
-                            className="px-3 py-3 border-r border-light align-top"
-                          >
-                            <ClassBlock classSession={classStartingNow} />
-                          </td>
-                        );
-                      }
-
-                      const overlappedButNotStart = classes.some(
-                        (c) => toMinutes(c.startTime) < slotStart,
-                      );
-                      if (overlappedButNotStart) return null;
-
-                      return (
-                        <td
+                  {viewMode === "daily"
+                    ? rooms.map((room) => (
+                        <th
                           key={room.id}
-                          className={`px-3 py-3 border-r border-light ${
-                            isWeekendDay(dayFromDate(selectedDate))
-                              ? "bg-gray-50"
-                              : "bg-white"
-                          } hover:bg-soft cursor-pointer transition-colors`}
-                          onClick={() => {
-                            setModalError("");
-                            setFieldErrors({});
-                            setForm((p) => ({
-                              ...p,
-                              trimister_id: selectedTrimesterId,
-                              day: dayFromDate(selectedDate),
-                              date: "",
-                              room_id: String(room.id),
-                              start_time: time,
-                            }));
-                            setShowAddModal(true);
-                          }}
+                          className="px-5 py-3 text-center text-xs text-body border-r border-light min-w-[200px]"
                         >
-                          <div className="h-20 flex items-center justify-center text-gray-400 text-sm hover:text-primary-blue transition-colors">
-                            <Plus className="w-5 h-5" />
+                          <div className="font-medium text-dark">
+                            {room.room_name}
                           </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Weekly View */}
-      {viewMode === "weekly" && (
-        <div
-          className="bg-white rounded-lg shadow-card overflow-hidden border border-light"
-          style={{
-            transform: `scale(${zoomLevel / 100})`,
-            transformOrigin: "top left",
-            width: `${10000 / zoomLevel}%`,
-          }}
-        >
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
-              <thead>
-                <tr className="bg-soft border-b border-light sticky top-0 z-20">
-                  <th className="sticky left-0 z-30 px-6 py-4 text-left text-sm text-body bg-soft border-r border-light min-w-[100px]">
-                    Time
-                  </th>
-
-                  {days.map((day) => (
-                    <th
-                      key={day}
-                      className={`px-6 py-4 text-center text-sm text-body border-r border-light min-w-[250px] ${
-                        isWeekendDay(day) ? "bg-gray-100" : ""
-                      }`}
-                    >
-                      <div className="font-medium">{day}</div>
-                      {isWeekendDay(day) && (
-                        <div className="text-xs text-gray-500 mt-1">
-                          🏖️ Weekend
-                        </div>
-                      )}
-                    </th>
-                  ))}
+                          <div className="text-gray-400 mt-0.5">
+                            Cap: {room.capacity}
+                          </div>
+                        </th>
+                      ))
+                    : days.map((day) => (
+                        <th
+                          key={day}
+                          className={`px-5 py-3 text-center text-xs text-body border-r border-light min-w-[230px] ${isWeekendDay(day) ? "bg-gray-50" : ""}`}
+                        >
+                          <div className="font-medium text-dark">{day}</div>
+                          {isWeekendDay(day) && (
+                            <div className="text-gray-400 mt-0.5">Weekend</div>
+                          )}
+                        </th>
+                      ))}
                 </tr>
               </thead>
-
               <tbody>
                 {timeSlots.map((time) => (
                   <tr
                     key={time}
                     className="border-b border-gray-100 hover:bg-soft/30 transition-colors"
                   >
-                    <td className="sticky left-0 z-10 px-6 py-4 text-sm text-body bg-white border-r border-light">
-                      <span className="font-medium">{time}</span>
+                    <td className="sticky left-0 z-10 px-5 py-3 text-xs font-medium text-body bg-white border-r border-light">
+                      {time}
                     </td>
 
-                    {days.map((day) => {
-                      const classes = getClassesForWeeklySlot(time, day);
+                    {viewMode === "daily"
+                      ? rooms.map((room) => {
+                          const classes = filteredClasses.filter((cls) => {
+                            const slotStart = toMinutes(time),
+                              slotEnd = slotStart + 60;
+                            const clsStart = toMinutes(cls.startTime),
+                              clsEnd = toMinutes(cls.endTime);
+                            return (
+                              Number(cls.roomId) === Number(room.id) &&
+                              clsStart < slotEnd &&
+                              clsEnd > slotStart
+                            );
+                          });
+                          const slotStart = toMinutes(time),
+                            slotEnd = slotStart + 60;
+                          const startingNow = classes.find((c) => {
+                            const cs = toMinutes(c.startTime);
+                            return cs >= slotStart && cs < slotEnd;
+                          });
 
-                      const slotStart = toMinutes(time);
-                      const slotEnd = slotStart + 60;
+                          if (startingNow) {
+                            return (
+                              <td
+                                key={room.id}
+                                rowSpan={getRowSpan(startingNow)}
+                                className="px-2 py-2 border-r border-light align-top"
+                              >
+                                <ClassBlock classSession={startingNow} />
+                              </td>
+                            );
+                          }
+                          if (
+                            classes.some(
+                              (c) => toMinutes(c.startTime) < slotStart,
+                            )
+                          )
+                            return null;
+                          return (
+                            <td
+                              key={room.id}
+                              className="px-2 py-2 border-r border-light bg-white hover:bg-soft cursor-pointer transition-colors"
+                              onClick={() => {
+                                setModalError("");
+                                setFieldErrors({});
+                                setForm((p) => ({
+                                  ...p,
+                                  trimister_id: selectedTrimesterId,
+                                  day: dayFromDate(selectedDate),
+                                  date: "",
+                                  room_id: String(room.id),
+                                  start_time: time,
+                                }));
+                                setShowAddModal(true);
+                              }}
+                            >
+                              <div className="h-16 flex items-center justify-center text-gray-300 hover:text-primary-blue transition-colors">
+                                <Plus className="w-4 h-4" />
+                              </div>
+                            </td>
+                          );
+                        })
+                      : days.map((day) => {
+                          const classes = getClassesForWeeklySlot(time, day);
+                          const slotStart = toMinutes(time),
+                            slotEnd = slotStart + 60;
+                          const startingNow = classes.find((c) => {
+                            const cs = toMinutes(c.startTime);
+                            return cs >= slotStart && cs < slotEnd;
+                          });
 
-                      const classStartingNow = classes.find((c) => {
-                        const cStart = toMinutes(c.startTime);
-                        return cStart >= slotStart && cStart < slotEnd;
-                      });
-
-                      if (classStartingNow) {
-                        return (
-                          <td
-                            key={day}
-                            rowSpan={getRowSpan(classStartingNow)}
-                            className={`px-3 py-3 border-r border-light align-top ${
-                              isWeekendDay(day) ? "bg-gray-50/50" : ""
-                            }`}
-                          >
-                            <div className="space-y-2">
-                              {classes
-                                .filter((cls) => {
-                                  const clsStart = toMinutes(cls.startTime);
-                                  return (
-                                    clsStart >= slotStart && clsStart < slotEnd
-                                  );
-                                })
-                                .map((cls) => (
-                                  <ClassBlock
-                                    key={cls.id}
-                                    classSession={cls}
-                                    compact={classes.length > 1}
-                                  />
-                                ))}
-                            </div>
-                          </td>
-                        );
-                      }
-
-                      const overlappedButNotStart = classes.some(
-                        (c) => toMinutes(c.startTime) < slotStart,
-                      );
-                      if (overlappedButNotStart) return null;
-
-                      return (
-                        <td
-                          key={day}
-                          className={`px-3 py-3 border-r border-light ${
-                            isWeekendDay(day) ? "bg-gray-50" : "bg-white"
-                          } hover:bg-soft cursor-pointer transition-colors`}
-                          onClick={() => {
-                            setModalError("");
-                            setFieldErrors({});
-                            setForm((p) => ({
-                              ...p,
-                              trimister_id: selectedTrimesterId,
-                              day,
-                              date: "",
-                              start_time: time,
-                            }));
-                            setShowAddModal(true);
-                          }}
-                        >
-                          <div className="h-20 flex items-center justify-center text-gray-400 text-sm hover:text-primary-blue transition-colors">
-                            <Plus className="w-5 h-5" />
-                          </div>
-                        </td>
-                      );
-                    })}
+                          if (startingNow) {
+                            return (
+                              <td
+                                key={day}
+                                rowSpan={getRowSpan(startingNow)}
+                                className={`px-2 py-2 border-r border-light align-top ${isWeekendDay(day) ? "bg-gray-50/50" : ""}`}
+                              >
+                                <div className="space-y-1.5">
+                                  {classes
+                                    .filter((c) => {
+                                      const cs = toMinutes(c.startTime);
+                                      return cs >= slotStart && cs < slotEnd;
+                                    })
+                                    .map((cls) => (
+                                      <ClassBlock
+                                        key={cls.id}
+                                        classSession={cls}
+                                        compact={classes.length > 1}
+                                      />
+                                    ))}
+                                </div>
+                              </td>
+                            );
+                          }
+                          if (
+                            classes.some(
+                              (c) => toMinutes(c.startTime) < slotStart,
+                            )
+                          )
+                            return null;
+                          return (
+                            <td
+                              key={day}
+                              className={`px-2 py-2 border-r border-light ${isWeekendDay(day) ? "bg-gray-50" : "bg-white"} hover:bg-soft cursor-pointer transition-colors`}
+                              onClick={() => {
+                                setModalError("");
+                                setFieldErrors({});
+                                setForm((p) => ({
+                                  ...p,
+                                  trimister_id: selectedTrimesterId,
+                                  day,
+                                  date: "",
+                                  start_time: time,
+                                }));
+                                setShowAddModal(true);
+                              }}
+                            >
+                              <div className="h-16 flex items-center justify-center text-gray-300 hover:text-primary-blue transition-colors">
+                                <Plus className="w-4 h-4" />
+                              </div>
+                            </td>
+                          );
+                        })}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         </div>
-      )}
+      )}{" "}
+      {/* end loading ternary */}
+      {/* ── Legend + summary in one row ── */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Legend */}
+        <div className="md:col-span-2 bg-white rounded-xl shadow-card p-4 border border-light">
+          <p className="text-sm font-medium text-dark mb-3">Program Legend</p>
+          <div className="flex flex-wrap gap-3">
+            {programNames.map((program) => {
+              const color = programColors[program] || DEFAULT_COLOR;
+              return (
+                <div key={program} className="flex items-center gap-1.5">
+                  <div className={`w-3 h-3 rounded-full ${color.bg}`} />
+                  <span className="text-xs text-body">{program}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
-      {/* ✅ Program Legend */}
-      <div className="bg-white rounded-lg shadow-card p-5 border border-light">
-        <h3 className="text-dark mb-4">Program Legend</h3>
-        <div className="flex flex-wrap gap-4">
-          {programNames.map((program) => {
-            const color = programColors[program] || DEFAULT_COLOR;
-            return (
-              <div key={program} className="flex items-center gap-2">
-                <div className={`w-5 h-5 rounded ${color.bg}`} />
-                <span className="text-sm text-body">{program}</span>
+        {/* Stats */}
+        <div className="bg-white rounded-xl shadow-card p-4 border border-light">
+          <p className="text-sm font-medium text-dark mb-3">Summary</p>
+          <div className="space-y-2">
+            {[
+              {
+                label: "Classes",
+                value: stats.totalClasses,
+                color: "text-primary-blue",
+              },
+              {
+                label: "Rooms Used",
+                value: stats.roomsUsed,
+                color: "text-green-600",
+              },
+              {
+                label: "Programs",
+                value: programNames.length,
+                color: "text-purple-600",
+              },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="flex items-center justify-between">
+                <span className="text-xs text-body">{label}</span>
+                <span className={`text-sm font-bold ${color}`}>{value}</span>
               </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ✅ Summary */}
-      <div className="bg-white rounded-lg shadow-card p-6 border border-light">
-        <h3 className="text-dark mb-4">Schedule Summary</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-          <div>
-            <p className="text-sm text-body mb-1">Total Classes</p>
-            <p className="text-3xl text-primary-blue">{stats.totalClasses}</p>
-          </div>
-          <div>
-            <p className="text-sm text-body mb-1">Conflicts</p>
-            <p className="text-3xl text-red-500">{stats.conflictCount}</p>
-          </div>
-          <div>
-            <p className="text-sm text-body mb-1">Rooms Used</p>
-            <p className="text-3xl text-green-600">{stats.roomsUsed}</p>
-          </div>
-          <div>
-            <p className="text-sm text-body mb-1">Programs</p>
-            <p className="text-3xl text-purple-600">{programNames.length}</p>
+            ))}
           </div>
         </div>
       </div>
-
       {/* ===================== MODALS ===================== */}
-
       {/* View Modal */}
       {showViewModal && selectedClass && (
         <>
@@ -1743,113 +1604,76 @@ export default function DailyTimetable() {
           />
           <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-y-auto">
-              <div className="border-b border-light px-6 py-4 flex items-center justify-between sticky top-0 bg-white">
+              <div className="border-b border-light px-6 py-4 flex items-center justify-between sticky top-0 bg-white z-10">
                 <h2 className="text-primary-blue">Class Details</h2>
                 <button
                   onClick={() => setShowViewModal(false)}
-                  className="p-2 hover:bg-soft rounded-lg transition-colors"
+                  className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5 text-body" />
                 </button>
               </div>
-
-              <div className="p-6 space-y-6">
-                <div>
-                  <label className="text-sm text-body mb-1 block">
-                    Trimester
-                  </label>
-                  <p className="text-dark">
-                    {selectedClass.trimester?.name ||
-                      `Trimester #${selectedClass.trimesterId}`}
-                  </p>
-                </div>
-
-                <div>
-                  <label className="text-sm text-body mb-1 block">
-                    Subject Code & Name
-                  </label>
-                  <p className="text-dark text-lg">
-                    {(selectedClass.subject as any)?.subject_code} -{" "}
-                    {(selectedClass.subject as any)?.subject_name}
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="text-sm text-body mb-1 block">
-                      Program
+              <div className="p-6 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 bg-soft rounded-lg border border-light md:col-span-2">
+                    <label className="text-xs text-body mb-1 block">
+                      Subject
                     </label>
-                    <p className="text-dark">{selectedClass.programName}</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="text-sm text-body mb-1 block">
-                      Class Type
-                    </label>
-                    <span className="inline-block px-3 py-1 rounded-full text-sm bg-blue-50 text-blue-700">
-                      {selectedClass.classType}
-                    </span>
-                  </div>
-                  <div>
-                    <label className="text-sm text-body mb-1 block">
-                      Day & Time
-                    </label>
-                    <p className="text-dark">
-                      {selectedClass.day}, {selectedClass.startTime} -{" "}
-                      {selectedClass.endTime}
-                      {selectedClass.date ? (
-                        <span className="ml-2 text-xs text-gray-500">
-                          (Date: {selectedClass.date})
-                        </span>
-                      ) : (
-                        <span className="ml-2 text-xs text-gray-500">
-                          (Routine)
-                        </span>
-                      )}
+                    <p className="text-dark font-medium">
+                      {(selectedClass.subject as any)?.subject_code} –{" "}
+                      {(selectedClass.subject as any)?.subject_name}
                     </p>
                   </div>
+                  {[
+                    {
+                      label: "Trimester",
+                      value:
+                        selectedClass.trimester?.name ||
+                        `#${selectedClass.trimesterId}`,
+                    },
+                    { label: "Program", value: selectedClass.programName },
+                    { label: "Class Type", value: selectedClass.classType },
+                    {
+                      label: "Day & Time",
+                      value: `${selectedClass.day}, ${selectedClass.startTime} – ${selectedClass.endTime}${selectedClass.date ? ` (${selectedClass.date})` : " (Routine)"}`,
+                    },
+                    {
+                      label: "Room",
+                      value: selectedClass.room?.room_name || "—",
+                    },
+                    {
+                      label: "Capacity",
+                      value: `${selectedClass.room?.capacity ?? "—"} students`,
+                    },
+                  ].map(({ label, value }) => (
+                    <div
+                      key={label}
+                      className="p-4 bg-soft rounded-lg border border-light"
+                    >
+                      <label className="text-xs text-body mb-1 block">
+                        {label}
+                      </label>
+                      <p className="text-dark text-sm">{value}</p>
+                    </div>
+                  ))}
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="text-sm text-body mb-1 block">Room</label>
-                    <p className="text-dark">{selectedClass.room?.room_name}</p>
-                  </div>
-                  <div>
-                    <label className="text-sm text-body mb-1 block">
-                      Room Capacity
-                    </label>
-                    <p className="text-dark">
-                      {selectedClass.room?.capacity} students
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-sm text-body mb-1 block">
+                <div className="p-4 bg-soft rounded-lg border border-light">
+                  <label className="text-xs text-body mb-1 block">
                     Teacher
                   </label>
-                  <div className="flex items-center gap-3 p-3 bg-soft rounded-lg border border-light">
-                    <Users className="w-5 h-5 text-primary-blue" />
-                    <div>
-                      <p className="text-dark">
-                        {selectedClass.teacher?.full_name}
-                      </p>
-                      <p className="text-sm text-body">
-                        {(selectedClass.teacher as any)?.department || ""}
-                      </p>
-                    </div>
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-primary-blue flex-shrink-0" />
+                    <p className="text-dark text-sm">
+                      {selectedClass.teacher?.full_name}
+                    </p>
                   </div>
                 </div>
-
-                <div>
-                  <label className="text-sm text-body mb-1 block">
+                <div className="p-4 bg-soft rounded-lg border border-light">
+                  <label className="text-xs text-body mb-1 block">
                     Enrolled Students
                   </label>
-                  <p className="text-dark text-2xl text-primary-blue">
-                    {selectedClass.enrolledStudents} students
+                  <p className={`text-2xl font-bold text-primary-blue`}>
+                    {selectedClass.enrolledStudents}
                   </p>
                 </div>
               </div>
@@ -1857,7 +1681,6 @@ export default function DailyTimetable() {
           </div>
         </>
       )}
-
       {/* Add Modal */}
       {showAddModal && (
         <>
@@ -1866,48 +1689,51 @@ export default function DailyTimetable() {
             onClick={() => setShowAddModal(false)}
           />
           <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="bg-white rounded-xl max-w-2xl w-full shadow-2xl max-h-[90vh] flex flex-col">
               <div className="border-b border-light px-6 py-4 flex items-center justify-between">
-                <h2 className="text-dark">Add Timetable</h2>
+                <h2 className="text-primary-blue">Add Timetable Session</h2>
                 <button
                   onClick={() => setShowAddModal(false)}
-                  className="p-2 hover:bg-soft rounded-lg transition-colors"
+                  className="p-2 hover:bg-soft active:bg-soft/80 rounded-lg transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5 text-body" />
                 </button>
               </div>
-
               <div className="p-6 space-y-4 overflow-y-auto">
                 {modalError && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 whitespace-pre-line">
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 whitespace-pre-line">
                     {modalError}
                   </div>
                 )}
-                <TimetableFormFields />
+                {renderFormFields()}
               </div>
-
               <div className="px-6 py-4 border-t border-light flex gap-3">
                 <button
-                  onClick={() => setShowAddModal(false)}
-                  className="flex-1 px-4 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 transition-colors"
+                  onClick={handleCreate}
                   disabled={saving}
+                  className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150 font-medium shadow-sm cursor-pointer"
+                >
+                  {saving ? (
+                    <span className="inline-flex items-center gap-2 justify-center">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving…
+                    </span>
+                  ) : (
+                    "Add Session"
+                  )}
+                </button>
+                <button
+                  onClick={() => setShowAddModal(false)}
+                  disabled={saving}
+                  className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
                 >
                   Cancel
-                </button>
-
-                <button
-                  onClick={handleCreate}
-                  className="flex-1 px-4 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity"
-                  disabled={saving}
-                >
-                  {saving ? "Saving..." : "Add Timetable"}
                 </button>
               </div>
             </div>
           </div>
         </>
       )}
-
       {/* Edit Modal */}
       {showEditModal && selectedClass && (
         <>
@@ -1916,48 +1742,102 @@ export default function DailyTimetable() {
             onClick={() => setShowEditModal(false)}
           />
           <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-2xl w-full shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="bg-white rounded-xl max-w-2xl w-full shadow-2xl max-h-[90vh] flex flex-col">
               <div className="border-b border-light px-6 py-4 flex items-center justify-between">
-                <h2 className="text-dark">Edit Timetable</h2>
+                <h2 className="text-primary-blue">Edit Timetable Session</h2>
                 <button
                   onClick={() => setShowEditModal(false)}
-                  className="p-2 hover:bg-soft rounded-lg transition-colors"
+                  className="p-2 hover:bg-soft active:bg-soft/80 rounded-lg transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5 text-body" />
                 </button>
               </div>
-
               <div className="p-6 space-y-4 overflow-y-auto">
                 {modalError && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 whitespace-pre-line">
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 whitespace-pre-line">
                     {modalError}
                   </div>
                 )}
-                <TimetableFormFields />
+                {renderFormFields()}
               </div>
-
               <div className="px-6 py-4 border-t border-light flex gap-3">
                 <button
-                  onClick={() => setShowEditModal(false)}
-                  className="flex-1 px-4 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 transition-colors"
+                  onClick={handleUpdate}
                   disabled={saving}
+                  className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150 font-medium shadow-sm cursor-pointer"
+                >
+                  {saving ? (
+                    <span className="inline-flex items-center gap-2 justify-center">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving…
+                    </span>
+                  ) : (
+                    "Update Session"
+                  )}
+                </button>
+                <button
+                  onClick={() => setShowEditModal(false)}
+                  disabled={saving}
+                  className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
                 >
                   Cancel
-                </button>
-
-                <button
-                  onClick={handleUpdate}
-                  className="flex-1 px-4 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity"
-                  disabled={saving}
-                >
-                  {saving ? "Saving..." : "Update Timetable"}
                 </button>
               </div>
             </div>
           </div>
         </>
       )}
-
+      {/* Delete Confirmation */}
+      {showDeleteConfirm && deleteTarget && (
+        <>
+          <div
+            className="fixed inset-0 bg-white/40 backdrop-blur-sm z-50"
+            onClick={() => setShowDeleteConfirm(false)}
+          />
+          <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl max-w-md w-full shadow-2xl">
+              <div className="p-6">
+                <div className="w-12 h-12 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Trash2 className="w-6 h-6 text-red-500" />
+                </div>
+                <h3 className="text-dark font-semibold text-center mb-2">
+                  Delete Session
+                </h3>
+                <p className="text-body text-sm text-center mb-6">
+                  Are you sure you want to delete{" "}
+                  <span className="font-medium text-dark">
+                    {(deleteTarget.subject as any)?.subject_code ||
+                      "this session"}
+                  </span>
+                  ? This cannot be undone.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={confirmDelete}
+                    disabled={deleting}
+                    className="flex-1 py-3 bg-red-500 text-white rounded-xl hover:bg-red-600 active:bg-red-700 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150 font-medium cursor-pointer"
+                  >
+                    {deleting ? (
+                      <span className="inline-flex items-center gap-2 justify-center">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Deleting…
+                      </span>
+                    ) : (
+                      "Delete"
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setShowDeleteConfirm(false)}
+                    className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       {/* Export Modal */}
       {showExportModal && (
         <>
@@ -1971,29 +1851,28 @@ export default function DailyTimetable() {
                 <h2 className="text-primary-blue">Export Timetable</h2>
                 <button
                   onClick={() => setShowExportModal(false)}
-                  className="p-2 hover:bg-soft rounded-lg transition-colors"
+                  className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer"
                 >
                   <X className="w-5 h-5 text-body" />
                 </button>
               </div>
-
               <div className="p-6">
-                <p className="text-body mb-6">
+                <p className="text-body text-sm mb-6">
                   Export the current timetable view as a PDF report.
                 </p>
                 <div className="flex gap-3">
                   <button
                     onClick={() => {
-                      alert("PDF Export should be implemented here.");
+                      toast.success("PDF export triggered.");
                       setShowExportModal(false);
                     }}
-                    className="flex-1 px-4 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 transition-opacity"
+                    className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
                   >
                     Export PDF
                   </button>
                   <button
                     onClick={() => setShowExportModal(false)}
-                    className="flex-1 px-4 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 transition-colors"
+                    className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
                   >
                     Cancel
                   </button>

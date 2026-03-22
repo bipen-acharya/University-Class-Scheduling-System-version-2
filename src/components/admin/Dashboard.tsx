@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../../api/axios";
+import { toast } from "sonner";
 
 import {
   Users,
@@ -12,6 +13,7 @@ import {
   AlertCircle,
   Building2,
   UserCheck,
+  Loader2,
 } from "lucide-react";
 
 import {
@@ -31,7 +33,6 @@ import {
   ApiTimeTableSession,
   Day,
 } from "../../types/timetable";
-
 import {
   getTeachers,
   getSubjects,
@@ -40,50 +41,33 @@ import {
 } from "../../services/catalog";
 import { getTimeTableSessions } from "../../services/timetable";
 
-/** =========================
- * Trimester type (matches your API)
- * ========================= */
+/** ========================= Types ========================= */
 type ApiTrimester = {
   id: number;
   name: string;
-  start_date: string; // YYYY-MM-DD
-  end_date: string; // YYYY-MM-DD
+  start_date: string;
+  end_date: string;
   status?: "active" | "inactive";
 };
 
-/** =========================
- * Room Booking types (matches your backend)
- * ========================= */
 type BookingStatus = "pending" | "approved" | "rejected";
 type EventType = "workshop" | "bootcamp" | "meeting" | "external" | "other";
-
-type RoomBookingRoomApi = {
-  id: number;
-  room_name: string;
-  capacity: number;
-  department?: string | null;
-};
 
 type RoomBookingApi = {
   id: number;
   event_name: string;
   event_type: EventType;
   room_id: number;
-  room?: RoomBookingRoomApi | null;
-
-  booking_date: string; // "2026-02-15T00:00:00.000000Z" or "2026-02-15"
-  start_time: string; // ISO or "09:00:00" or "09:00"
+  room?: { id: number; room_name: string; capacity: number } | null;
+  booking_date: string;
+  start_time: string;
   end_time: string;
-
   organiser_name: string;
   status: BookingStatus;
 };
 
 type ApiListResponse<T> = { status: number; message: string; data: T[] };
 
-/** =========================
- * Constants
- * ========================= */
 const DAYS: Day[] = [
   "Monday",
   "Tuesday",
@@ -93,7 +77,6 @@ const DAYS: Day[] = [
   "Saturday",
   "Sunday",
 ];
-
 const SHORT_DAY: Record<Day, string> = {
   Monday: "Mon",
   Tuesday: "Tue",
@@ -104,77 +87,51 @@ const SHORT_DAY: Record<Day, string> = {
   Sunday: "Sun",
 };
 
-/** =========================
- * Helpers (dates/times)
- * ========================= */
-const toISODate = (d: Date) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-};
-
+/** ========================= Helpers ========================= */
+const toISODate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const normalizeISO = (v: any) => (v ? String(v).slice(0, 10) : "");
-
-const inDateRange = (dateISO: string, startISO: string, endISO: string) => {
-  if (!dateISO || !startISO || !endISO) return false;
-  return dateISO >= startISO && dateISO <= endISO;
+const inDateRange = (d: string, s: string, e: string) =>
+  !!d && !!s && !!e && d >= s && d <= e;
+const toMinutes = (t: string) => {
+  if (!t) return 0;
+  const [h, m] = String(t).trim().slice(0, 5).split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+};
+const timeFromApi = (v: string) => {
+  if (!v) return "";
+  if (v.includes("T")) {
+    const d = new Date(v);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  return v.slice(0, 5);
 };
 
-const dayFromDate = (isoDate: string): Day => {
-  const [y, m, d] = isoDate.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  const js = dt.getDay(); // 0 Sun ... 6 Sat
-  const map: Day[] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-  ];
-  return map[js];
+const dayFromDate = (iso: string): Day => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return (
+    [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+    ] as Day[]
+  )[new Date(y, m - 1, d).getDay()];
 };
 
-function toMinutes(hhmm: string) {
-  if (!hhmm) return 0;
-  const parts = String(hhmm).trim().slice(0, 5).split(":");
-  const h = Number(parts[0] ?? 0);
-  const m = Number(parts[1] ?? 0);
-  return h * 60 + m;
-}
-
-function isRunningLikeLive(session: ApiTimeTableSession, now = new Date()) {
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const start = toMinutes(session.start_time);
-  const end = toMinutes(session.end_time);
-  return cur >= start && cur < end;
-}
-
-function minutesUntilStart(session: ApiTimeTableSession, now = new Date()) {
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const start = toMinutes(session.start_time);
-  return start - cur;
-}
-
-function formatStartsIn(mins: number) {
-  if (mins <= 0) return "Now";
-  if (mins < 60) return `${mins} mins`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m === 0 ? `${h} hr` : `${h} hr ${m} mins`;
-}
-
-/** Count weekday occurrences inside trimester range (inclusive) */
-const countWeekdayOccurrences = (startISO: string, endISO: string, weekday: Day) => {
+const countWeekdayOccurrences = (
+  startISO: string,
+  endISO: string,
+  weekday: Day,
+) => {
   const [sy, sm, sd] = startISO.split("-").map(Number);
   const [ey, em, ed] = endISO.split("-").map(Number);
-
-  const start = new Date(sy, sm - 1, sd);
-  const end = new Date(ey, em - 1, ed);
-
-  const targetIndex = {
+  const start = new Date(sy, sm - 1, sd),
+    end = new Date(ey, em - 1, ed);
+  const idx = {
     Sunday: 0,
     Monday: 1,
     Tuesday: 2,
@@ -183,61 +140,92 @@ const countWeekdayOccurrences = (startISO: string, endISO: string, weekday: Day)
     Friday: 5,
     Saturday: 6,
   }[weekday];
-
-  let count = 0;
   const cursor = new Date(start);
-
-  while (cursor.getDay() !== targetIndex) {
+  while (cursor.getDay() !== idx) {
     cursor.setDate(cursor.getDate() + 1);
     if (cursor > end) return 0;
   }
-
+  let count = 0;
   while (cursor <= end) {
-    count += 1;
+    count++;
     cursor.setDate(cursor.getDate() + 7);
   }
-
   return count;
 };
 
-/** Room booking time normalization */
-const timeFromApi = (value: string) => {
-  if (!value) return "";
-  if (value.includes("T")) {
-    const d = new Date(value);
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  }
-  return value.slice(0, 5);
+const isRunningNow = (s: ApiTimeTableSession) => {
+  const cur = new Date().getHours() * 60 + new Date().getMinutes();
+  return cur >= toMinutes(s.start_time) && cur < toMinutes(s.end_time);
 };
 
+const minsUntilStart = (s: ApiTimeTableSession) =>
+  toMinutes(s.start_time) -
+  (new Date().getHours() * 60 + new Date().getMinutes());
+const formatStartsIn = (m: number) =>
+  m <= 0
+    ? "Now"
+    : m < 60
+      ? `${m}m`
+      : `${Math.floor(m / 60)}h ${m % 60 ? `${m % 60}m` : ""}`.trim();
+
+/** ========================= Skeletons ========================= */
+function StatSkeleton() {
+  return (
+    <div className="bg-white rounded-xl shadow-card p-5 border border-light">
+      <div className="flex items-center justify-between">
+        <div className="space-y-2">
+          <div className="h-3.5 w-28 rounded bg-gray-200 animate-pulse" />
+          <div className="h-8 w-14 rounded bg-gray-200 animate-pulse" />
+        </div>
+        <div className="w-10 h-10 rounded-lg bg-gray-200 animate-pulse" />
+      </div>
+    </div>
+  );
+}
+
+function ClassCardSkeleton() {
+  return (
+    <div className="p-4 bg-soft rounded-xl border border-light space-y-3">
+      <div className="flex items-start justify-between">
+        <div className="space-y-2">
+          <div className="h-3.5 w-20 rounded bg-gray-200 animate-pulse" />
+          <div className="h-4 w-40 rounded bg-gray-200 animate-pulse" />
+          <div className="h-3.5 w-28 rounded bg-gray-200 animate-pulse" />
+        </div>
+        <div className="h-5 w-12 rounded-full bg-gray-200 animate-pulse" />
+      </div>
+      <div className="flex justify-between pt-2 border-t border-light">
+        <div className="h-3 w-20 rounded bg-gray-200 animate-pulse" />
+        <div className="h-3 w-20 rounded bg-gray-200 animate-pulse" />
+      </div>
+    </div>
+  );
+}
+
+function ChartSkeleton() {
+  return (
+    <div className="w-full h-56 rounded-xl bg-gray-50 border border-light animate-pulse" />
+  );
+}
+
+/** ========================= Main ========================= */
 export default function Dashboard() {
   const token = useMemo(() => localStorage.getItem("token"), []);
 
-  /** Timetable data */
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
-
+  const [loading, setLoading] = useState(true);
+  const [loadingBookings, setLoadingBookings] = useState(true);
   const [teachers, setTeachers] = useState<ApiTeacher[]>([]);
   const [subjects, setSubjects] = useState<ApiSubject[]>([]);
   const [rooms, setRooms] = useState<ApiRoom[]>([]);
   const [sessions, setSessions] = useState<ApiTimeTableSession[]>([]);
-
   const [trimesters, setTrimesters] = useState<ApiTrimester[]>([]);
   const [selectedTrimesterId, setSelectedTrimesterId] = useState<string>("");
-
-  /** Room booking data */
   const [roomBookings, setRoomBookings] = useState<RoomBookingApi[]>([]);
-  const [loadingRoomBookings, setLoadingRoomBookings] = useState(false);
-
-  /** Example user stats (keep if you have real users API later) */
-  const totalUsers = 0;
-  const activeUsers = 0;
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setErrorMsg("");
+    (async () => {
       try {
+        setLoading(true);
         const [t, s, r, tt, tr] = await Promise.all([
           getTeachers(),
           getSubjects(),
@@ -245,121 +233,124 @@ export default function Dashboard() {
           getTimeTableSessions(),
           getTrimesters(),
         ]);
-
         setTeachers(t.data || []);
         setSubjects(s.data || []);
         setRooms(r.data || []);
         setSessions(tt.data || []);
         setTrimesters(tr.data || []);
 
-        const active = (tr.data || []).find((x: ApiTrimester) => x.status === "active");
-        if (active) setSelectedTrimesterId(String(active.id));
-        else if ((tr.data || []).length > 0) setSelectedTrimesterId(String((tr.data || [])[0].id));
+        const list = tr.data || [];
+        const active = list.find((x: ApiTrimester) => x.status === "active");
+        const pick = active || list[0];
+        if (pick) setSelectedTrimesterId(String(pick.id));
       } catch (e: any) {
-        console.error(e);
-        setErrorMsg(e?.response?.data?.message || "Failed to load dashboard data.");
+        toast.error(
+          e?.response?.data?.message || "Failed to load dashboard data.",
+        );
       } finally {
         setLoading(false);
       }
-    };
-
-    load();
+    })();
   }, []);
 
   useEffect(() => {
-    const fetchRoomBookings = async () => {
-      if (!token) return;
-      setLoadingRoomBookings(true);
+    if (!token) return;
+    (async () => {
       try {
-        const res = await api.get<ApiListResponse<RoomBookingApi>>("/room-bookings", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        setLoadingBookings(true);
+        const res = await api.get<ApiListResponse<RoomBookingApi>>(
+          "/room-bookings",
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
         if (res.data.status === 1) setRoomBookings(res.data.data || []);
-      } catch (e) {
-        // keep silent or show message if you want
+      } catch {
+        /* silent */
       } finally {
-        setLoadingRoomBookings(false);
+        setLoadingBookings(false);
       }
-    };
-
-    fetchRoomBookings();
+    })();
   }, [token]);
 
-  const selectedTrimester = useMemo(() => {
-    if (!selectedTrimesterId) return null;
-    return trimesters.find((t) => String(t.id) === String(selectedTrimesterId)) || null;
-  }, [trimesters, selectedTrimesterId]);
+  /** ── Derived ── */
+  const selectedTrimester = useMemo(
+    () =>
+      trimesters.find((t) => String(t.id) === String(selectedTrimesterId)) ||
+      null,
+    [trimesters, selectedTrimesterId],
+  );
 
-  /** today info */
   const todayISO = useMemo(() => toISODate(new Date()), []);
   const todayDay = useMemo(() => dayFromDate(todayISO), [todayISO]);
 
-  /** Banner: days remaining */
   const daysRemaining = useMemo(() => {
     if (!selectedTrimester) return null;
-    const end = new Date(`${selectedTrimester.end_date}T23:59:59`);
-    const diff = end.getTime() - new Date().getTime();
-    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+    return Math.max(
+      0,
+      Math.ceil(
+        (new Date(`${selectedTrimester.end_date}T23:59:59`).getTime() -
+          Date.now()) /
+          86400000,
+      ),
+    );
   }, [selectedTrimester]);
 
-  /** date sessions inside trimester range */
   const dateSessionsInTrimester = useMemo(() => {
     if (!selectedTrimester) return [];
-    const startISO = selectedTrimester.start_date;
-    const endISO = selectedTrimester.end_date;
-
-    return (sessions || []).filter((s) => {
-      const d = normalizeISO((s as any).date);
-      if (!d) return false;
-      return inDateRange(d, startISO, endISO);
+    return (sessions || []).filter((s: any) => {
+      const d = normalizeISO(s.date);
+      return (
+        d &&
+        inDateRange(d, selectedTrimester.start_date, selectedTrimester.end_date)
+      );
     });
   }, [sessions, selectedTrimester]);
 
-  /** routine sessions only if today is inside trimester */
   const routineTodaySessions = useMemo(() => {
-    if (!selectedTrimester) return [];
-    const startISO = selectedTrimester.start_date;
-    const endISO = selectedTrimester.end_date;
-
-    if (!inDateRange(todayISO, startISO, endISO)) return [];
-
-    return (sessions || []).filter((s: any) => !normalizeISO(s.date) && s.day === todayDay);
+    if (
+      !selectedTrimester ||
+      !inDateRange(
+        todayISO,
+        selectedTrimester.start_date,
+        selectedTrimester.end_date,
+      )
+    )
+      return [];
+    return (sessions || []).filter(
+      (s: any) => !normalizeISO(s.date) && s.day === todayDay,
+    );
   }, [sessions, selectedTrimester, todayISO, todayDay]);
 
-  /** today classes (prefer date-specific for today, else routine) */
   const todayClasses = useMemo(() => {
-    const dateToday = dateSessionsInTrimester.filter((s: any) => normalizeISO(s.date) === todayISO);
-    if (dateToday.length > 0) return dateToday;
-    return routineTodaySessions;
+    const dateToday = dateSessionsInTrimester.filter(
+      (s: any) => normalizeISO(s.date) === todayISO,
+    );
+    return dateToday.length > 0 ? dateToday : routineTodaySessions;
   }, [dateSessionsInTrimester, routineTodaySessions, todayISO]);
 
-  /** Running now */
-  const runningNow = useMemo(() => {
-    const now = new Date();
-    return todayClasses.filter((x) => isRunningLikeLive(x, now));
-  }, [todayClasses]);
+  const runningNow = useMemo(
+    () => todayClasses.filter((x) => isRunningNow(x)),
+    [todayClasses],
+  );
+  const upcomingNextHour = useMemo(
+    () =>
+      todayClasses
+        .filter((x) => {
+          const m = minsUntilStart(x);
+          return m > 0 && m <= 60;
+        })
+        .sort((a, b) =>
+          String(a.start_time).localeCompare(String(b.start_time)),
+        )
+        .slice(0, 5),
+    [todayClasses],
+  );
 
-  /** Upcoming next hour */
-  const upcomingNextHour = useMemo(() => {
-    const now = new Date();
-    return todayClasses
-      .filter((x) => {
-        const mins = minutesUntilStart(x, now);
-        return mins > 0 && mins <= 60;
-      })
-      .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
-      .slice(0, 6);
-  }, [todayClasses]);
-
-  /** Weekly overview (trimester totals) */
   const weeklyData = useMemo(() => {
-    if (!selectedTrimester) {
+    if (!selectedTrimester)
       return DAYS.map((d) => ({ day: SHORT_DAY[d], classes: 0 }));
-    }
-
-    const startISO = selectedTrimester.start_date;
-    const endISO = selectedTrimester.end_date;
-
+    const { start_date: s, end_date: e } = selectedTrimester;
     const counts: Record<Day, number> = {
       Monday: 0,
       Tuesday: 0,
@@ -369,245 +360,246 @@ export default function Dashboard() {
       Saturday: 0,
       Sunday: 0,
     };
-
-    const routine = (sessions || []).filter((s: any) => !normalizeISO(s.date) && s.day);
-    routine.forEach((s: any) => {
-      const d: Day = s.day;
-      const occ = countWeekdayOccurrences(startISO, endISO, d);
-      counts[d] += occ;
+    (sessions || [])
+      .filter((x: any) => !normalizeISO(x.date) && x.day)
+      .forEach((x: any) => {
+        counts[x.day as Day] += countWeekdayOccurrences(s, e, x.day as Day);
+      });
+    dateSessionsInTrimester.forEach((x: any) => {
+      counts[dayFromDate(normalizeISO(x.date))] += 1;
     });
-
-    dateSessionsInTrimester.forEach((s: any) => {
-      const d = dayFromDate(normalizeISO(s.date));
-      counts[d] += 1;
-    });
-
     return DAYS.map((d) => ({ day: SHORT_DAY[d], classes: counts[d] || 0 }));
   }, [sessions, selectedTrimester, dateSessionsInTrimester]);
 
-  /** -------- Room bookings: stats + today's list -------- */
-  const roomBookingsTodayApproved = useMemo(() => {
-    return (roomBookings || [])
-      .filter((b) => b.status === "approved" && normalizeISO(b.booking_date) === todayISO)
-      .sort((a, b) => timeFromApi(a.start_time).localeCompare(timeFromApi(b.start_time)))
-      .slice(0, 6);
-  }, [roomBookings, todayISO]);
+  const roomBookingsTodayApproved = useMemo(
+    () =>
+      (roomBookings || [])
+        .filter(
+          (b) =>
+            b.status === "approved" &&
+            normalizeISO(b.booking_date) === todayISO,
+        )
+        .sort((a, b) =>
+          timeFromApi(a.start_time).localeCompare(timeFromApi(b.start_time)),
+        )
+        .slice(0, 6),
+    [roomBookings, todayISO],
+  );
 
-  const pendingRoomRequests = useMemo(() => {
-    return (roomBookings || []).filter((b) => b.status === "pending").length;
-  }, [roomBookings]);
+  const pendingRequests = useMemo(
+    () => (roomBookings || []).filter((b) => b.status === "pending").length,
+    [roomBookings],
+  );
 
   const upcomingApprovedEvents = useMemo(() => {
-    const now = new Date();
-    const nowTime = now.getTime();
-    const in7days = nowTime + 7 * 24 * 60 * 60 * 1000;
-
+    const now = Date.now(),
+      in7 = now + 7 * 86400000;
     return (roomBookings || [])
-      .filter((b) => b.status === "approved")
-      .filter((b) => {
-        const dt = new Date(`${normalizeISO(b.booking_date)}T00:00:00`);
-        const t = dt.getTime();
-        return t >= nowTime && t <= in7days;
-      })
-      .sort((a, b) => {
-        const da = normalizeISO(a.booking_date);
-        const db = normalizeISO(b.booking_date);
-        if (da !== db) return da.localeCompare(db);
-        return timeFromApi(a.start_time).localeCompare(timeFromApi(b.start_time));
-      })
+      .filter(
+        (b) =>
+          b.status === "approved" &&
+          (() => {
+            const t = new Date(
+              `${normalizeISO(b.booking_date)}T00:00:00`,
+            ).getTime();
+            return t >= now && t <= in7;
+          })(),
+      )
       .slice(0, 6);
   }, [roomBookings]);
 
-  /** Summary cards */
-  const stats = useMemo(() => {
-    const classesInTrimester = weeklyData.reduce((sum, x) => sum + Number(x.classes || 0), 0);
+  const totalClasses = weeklyData.reduce(
+    (s, x) => s + Number(x.classes || 0),
+    0,
+  );
 
-    return [
-      {
-        label: "Total Teachers",
-        value: String(teachers.length),
-        icon: Users,
-        color: "bg-blue-50",
-        iconColor: "text-primary-blue",
-      },
-      {
-        label: "Total Subjects",
-        value: String(subjects.length),
-        icon: BookOpen,
-        color: "bg-green-50",
-        iconColor: "text-success",
-      },
-      {
-        label: "Total Rooms",
-        value: String(rooms.length),
-        icon: DoorOpen,
-        color: "bg-purple-50",
-        iconColor: "text-purple-600",
-      },
-      {
-        label: "Classes (Trimester)",
-        value: String(classesInTrimester),
-        icon: Calendar,
-        color: "bg-orange-50",
-        iconColor: "text-orange-600",
-      },
-      {
-        label: "Upcoming Events (7 days)",
-        value: String(upcomingApprovedEvents.length),
-        icon: CalendarDays,
-        color: "bg-indigo-50",
-        iconColor: "text-indigo-600",
-      },
-      {
-        label: "Pending Room Requests",
-        value: String(pendingRoomRequests),
-        icon: AlertCircle,
-        color: "bg-yellow-50",
-        iconColor: "text-yellow-700",
-      },
-      {
-        label: "Total Users",
-        value: String(totalUsers),
-        icon: Users,
-        color: "bg-cyan-50",
-        iconColor: "text-cyan-600",
-      },
-      {
-        label: "Active Users",
-        value: String(activeUsers),
-        icon: UserCheck,
-        color: "bg-teal-50",
-        iconColor: "text-teal-600",
-      },
-    ];
-  }, [
-    teachers.length,
-    subjects.length,
-    rooms.length,
-    weeklyData,
-    upcomingApprovedEvents.length,
-    pendingRoomRequests,
-    totalUsers,
-    activeUsers,
-  ]);
+  const stats = [
+    {
+      label: "Teachers",
+      value: loading ? "—" : teachers.length,
+      icon: Users,
+      bg: "bg-blue-50",
+      color: "text-primary-blue",
+    },
+    {
+      label: "Subjects",
+      value: loading ? "—" : subjects.length,
+      icon: BookOpen,
+      bg: "bg-green-50",
+      color: "text-green-600",
+    },
+    {
+      label: "Rooms",
+      value: loading ? "—" : rooms.length,
+      icon: DoorOpen,
+      bg: "bg-purple-50",
+      color: "text-purple-600",
+    },
+    {
+      label: "Classes (Trimester)",
+      value: loading ? "—" : totalClasses,
+      icon: Calendar,
+      bg: "bg-orange-50",
+      color: "text-orange-600",
+    },
+    {
+      label: "Upcoming Events",
+      value: loadingBookings ? "—" : upcomingApprovedEvents.length,
+      icon: CalendarDays,
+      bg: "bg-indigo-50",
+      color: "text-indigo-600",
+    },
+    {
+      label: "Pending Requests",
+      value: loadingBookings ? "—" : pendingRequests,
+      icon: AlertCircle,
+      bg: "bg-yellow-50",
+      color: "text-yellow-700",
+    },
+    {
+      label: "Total Users",
+      value: 0,
+      icon: Users,
+      bg: "bg-cyan-50",
+      color: "text-cyan-600",
+    },
+    {
+      label: "Active Users",
+      value: 0,
+      icon: UserCheck,
+      bg: "bg-teal-50",
+      color: "text-teal-600",
+    },
+  ];
 
+  const todayInTrimester = selectedTrimester
+    ? inDateRange(
+        todayISO,
+        selectedTrimester.start_date,
+        selectedTrimester.end_date,
+      )
+    : false;
+
+  /** ========================= Render ========================= */
   return (
-    <div className="space-y-6">
-      {/* ✅ Top Banner: Current Trimester (NO "Dashboard" text) */}
-      <div className="bg-primary-blue rounded-2xl shadow-card-lg p-6 border border-primary-blue text-white">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div className="flex items-start gap-4">
-            <div className="p-3 bg-white/10 rounded-xl">
-              <CalendarDays className="w-6 h-6 text-white" />
+    <div className="space-y-5">
+      {/* ── Banner ── */}
+      <div className="bg-primary-blue rounded-xl p-5 text-white">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-white/10 rounded-xl flex-shrink-0">
+              <CalendarDays className="w-5 h-5 text-white" />
             </div>
-
             <div>
-              <div className="flex items-center gap-2 mb-1">
-                <h3 className="text-lg font-semibold">Current Trimester</h3>
-                <span className="px-3 py-1 bg-white/20 rounded-lg text-xs font-medium">
-                  {selectedTrimester ? selectedTrimester.name : "Not selected"}
-                </span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="font-semibold text-white">
+                  {loading
+                    ? "Loading…"
+                    : selectedTrimester?.name || "No Trimester Selected"}
+                </h2>
+                {selectedTrimester && (
+                  <span className="px-2.5 py-0.5 bg-white/20 rounded-full text-xs">
+                    {selectedTrimester.start_date} →{" "}
+                    {selectedTrimester.end_date}
+                  </span>
+                )}
               </div>
-
-              <p className="text-white/80 text-xs">
+              <p className="text-white/70 text-xs mt-0.5">
                 {selectedTrimester
-                  ? `${selectedTrimester.start_date} - ${selectedTrimester.end_date}`
-                  : "Select a trimester to view details"}
+                  ? `${daysRemaining} days remaining`
+                  : "Select a trimester below to view data"}
               </p>
-
-              {errorMsg && <p className="text-sm text-red-200 mt-2">{errorMsg}</p>}
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-            {/* Days remaining */}
-            <div className="text-center sm:text-right">
-              <p className="text-3xl font-bold text-white">
-                {selectedTrimester ? daysRemaining : "—"}
-              </p>
-              <p className="text-xs text-white/80">Days Remaining</p>
-            </div>
-
-            {/* Trimester Picker */}
-            <div className="bg-white/10 rounded-xl px-4 py-3 border border-white/20">
-              <label className="block text-xs text-white/80 mb-1">Select Trimester *</label>
-              <select
-                value={selectedTrimesterId}
-                onChange={(e) => setSelectedTrimesterId(e.target.value)}
-                className="px-3 py-2 border border-white/20 bg-white/10 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-white/40 text-sm"
-              >
-                <option value="" className="text-dark">
-                  {loading ? "Loading..." : "Select Trimester"}
+          <div className="flex items-center gap-3">
+            {loading && (
+              <Loader2 className="w-4 h-4 text-white/60 animate-spin flex-shrink-0" />
+            )}
+            <select
+              value={selectedTrimesterId}
+              onChange={(e) => setSelectedTrimesterId(e.target.value)}
+              className="px-3 py-2 border border-white/20 bg-white/10 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-white/40 text-sm cursor-pointer"
+            >
+              <option value="" className="text-dark">
+                {loading ? "Loading…" : "Select Trimester"}
+              </option>
+              {trimesters.map((t) => (
+                <option key={t.id} value={String(t.id)} className="text-dark">
+                  {t.name} ({t.start_date} – {t.end_date})
                 </option>
-
-                {trimesters.map((t) => (
-                  <option key={t.id} value={String(t.id)} className="text-dark">
-                    {t.name} ({t.start_date} - {t.end_date})
-                  </option>
-                ))}
-              </select>
-            </div>
+              ))}
+            </select>
           </div>
         </div>
       </div>
 
-      {!selectedTrimester ? (
-        <div className="bg-white rounded-xl shadow-card border border-light p-6 text-body">
+      {/* ── Stat cards ── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {loading
+          ? Array.from({ length: 8 }).map((_, i) => <StatSkeleton key={i} />)
+          : stats.map(({ label, value, icon: Icon, bg, color }) => (
+              <div
+                key={label}
+                className="bg-white rounded-xl shadow-card p-4 border border-light"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-body mb-1">{label}</p>
+                    <p className={`text-2xl font-bold ${color}`}>{value}</p>
+                  </div>
+                  <div className={`${bg} p-2.5 rounded-lg`}>
+                    <Icon className={`w-5 h-5 ${color}`} />
+                  </div>
+                </div>
+              </div>
+            ))}
+      </div>
+
+      {!loading && !selectedTrimester ? (
+        <div className="bg-white rounded-xl shadow-card border border-light p-8 text-center text-body">
           Please select a trimester to view dashboard data.
         </div>
       ) : (
         <>
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {stats.map((stat, index) => {
-              const Icon = stat.icon;
-              return (
-                <div
-                  key={index}
-                  className="bg-white rounded-2xl shadow-card-lg p-6 border border-light hover-lift transition-all"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-body mb-1">{stat.label}</p>
-                      <p className="text-3xl text-dark font-bold">{stat.value}</p>
-                    </div>
-                    <div className={`${stat.color} p-3 rounded-xl`}>
-                      <Icon className={`w-6 h-6 ${stat.iconColor}`} />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Running Now & Upcoming Next Hour */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Running Now */}
-            <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-              <div className="flex items-center gap-3 mb-6">
+          {/* ── Running now + Upcoming ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Running now */}
+            <div className="bg-white rounded-xl shadow-card p-5 border border-light">
+              <div className="flex items-center gap-2.5 mb-4">
                 <div className="p-2 bg-green-50 rounded-lg">
-                  <Clock className="w-5 h-5 text-success" />
+                  <Clock className="w-4 h-4 text-green-600" />
                 </div>
                 <div>
-                  <h3 className="text-lg text-dark font-semibold">Classes Running Now</h3>
-                  <p className="text-sm text-body">
-                    {inDateRange(todayISO, selectedTrimester.start_date, selectedTrimester.end_date)
-                      ? `${runningNow.length} active classes`
-                      : "Today is outside this trimester range"}
+                  <h3 className="text-dark font-semibold text-sm">
+                    Classes Running Now
+                  </h3>
+                  <p className="text-xs text-body">
+                    {loading
+                      ? "Loading…"
+                      : todayInTrimester
+                        ? `${runningNow.length} active`
+                        : "Outside trimester range"}
                   </p>
                 </div>
               </div>
 
-              {!inDateRange(todayISO, selectedTrimester.start_date, selectedTrimester.end_date) ? (
-                <div className="text-center py-10 bg-soft rounded-xl border border-light">
-                  <p className="text-body">No live classes (today is outside the selected trimester).</p>
+              {loading ? (
+                <div className="space-y-3">
+                  {Array.from({ length: 2 }).map((_, i) => (
+                    <ClassCardSkeleton key={i} />
+                  ))}
+                </div>
+              ) : !todayInTrimester ? (
+                <div className="text-center py-8 text-body text-sm bg-soft rounded-xl border border-light">
+                  Today is outside the selected trimester.
                 </div>
               ) : runningNow.length === 0 ? (
-                <div className="text-center py-10 bg-soft rounded-xl border border-light">
-                  <p className="text-body">No classes are running right now.</p>
+                <div className="text-center py-8 text-body text-sm bg-soft rounded-xl border border-light">
+                  No classes running right now.
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {runningNow.map((cls) => (
                     <div
                       key={cls.id}
@@ -616,34 +608,35 @@ export default function Dashboard() {
                       <div className="flex items-start justify-between mb-2">
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                            <span className="text-sm text-success font-semibold">
+                            <span className="text-xs font-bold text-green-700">
                               {cls.subject?.subject_code || "SUB"}
                             </span>
-                            <span className="px-2 py-0.5 bg-success text-white rounded-full text-xs">
+                            <span className="px-2 py-0.5 bg-green-500 text-white rounded-full text-xs">
                               Live
                             </span>
                           </div>
-                          <h4 className="text-dark font-medium mb-1">
+                          <p className="text-sm font-medium text-dark">
                             {cls.subject?.subject_name || "Subject"}
-                          </h4>
-                          <p className="text-sm text-body">
+                          </p>
+                          <p className="text-xs text-body">
                             {cls.teacher?.full_name || "Teacher"}
                           </p>
                         </div>
                       </div>
-
-                      <div className="flex items-center justify-between text-xs text-body mt-3 pt-3 border-t border-green-200">
+                      <div className="flex items-center justify-between text-xs text-body pt-2.5 border-t border-green-200">
                         <span className="flex items-center gap-1">
                           <DoorOpen className="w-3 h-3" />
                           {cls.room?.room_name || "Room"}
                         </span>
                         <span className="flex items-center gap-1">
                           <Clock className="w-3 h-3" />
-                          {String(cls.start_time).slice(0, 5)} - {String(cls.end_time).slice(0, 5)}
+                          {String(cls.start_time).slice(0, 5)} –{" "}
+                          {String(cls.end_time).slice(0, 5)}
                         </span>
                         <span className="flex items-center gap-1">
                           <Users className="w-3 h-3" />
-                          {`${cls.enrolled_students ?? 0}/${cls.room?.capacity ?? "-"}`}
+                          {cls.enrolled_students ?? 0}/
+                          {cls.room?.capacity ?? "—"}
                         </span>
                       </div>
                     </div>
@@ -652,66 +645,76 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Upcoming Next Hour */}
-            <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-              <div className="flex items-center gap-3 mb-6">
+            {/* Upcoming next hour */}
+            <div className="bg-white rounded-xl shadow-card p-5 border border-light">
+              <div className="flex items-center gap-2.5 mb-4">
                 <div className="p-2 bg-blue-50 rounded-lg">
-                  <Calendar className="w-5 h-5 text-primary-blue" />
+                  <Calendar className="w-4 h-4 text-primary-blue" />
                 </div>
                 <div>
-                  <h3 className="text-lg text-dark font-semibold">Upcoming Next Hour</h3>
-                  <p className="text-sm text-body">
-                    {inDateRange(todayISO, selectedTrimester.start_date, selectedTrimester.end_date)
-                      ? `${upcomingNextHour.length} classes starting soon`
-                      : "Today is outside this trimester range"}
+                  <h3 className="text-dark font-semibold text-sm">
+                    Upcoming Next Hour
+                  </h3>
+                  <p className="text-xs text-body">
+                    {loading
+                      ? "Loading…"
+                      : todayInTrimester
+                        ? `${upcomingNextHour.length} starting soon`
+                        : "Outside trimester range"}
                   </p>
                 </div>
               </div>
 
-              {!inDateRange(todayISO, selectedTrimester.start_date, selectedTrimester.end_date) ? (
-                <div className="text-center py-10 bg-soft rounded-xl border border-light">
-                  <p className="text-body">No upcoming classes (today is outside the selected trimester).</p>
+              {loading ? (
+                <div className="space-y-3">
+                  {Array.from({ length: 2 }).map((_, i) => (
+                    <ClassCardSkeleton key={i} />
+                  ))}
+                </div>
+              ) : !todayInTrimester ? (
+                <div className="text-center py-8 text-body text-sm bg-soft rounded-xl border border-light">
+                  Today is outside the selected trimester.
                 </div>
               ) : upcomingNextHour.length === 0 ? (
-                <div className="text-center py-10 bg-soft rounded-xl border border-light">
-                  <p className="text-body">No classes starting within the next hour.</p>
+                <div className="text-center py-8 text-body text-sm bg-soft rounded-xl border border-light">
+                  No classes in the next hour.
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-3">
                   {upcomingNextHour.map((cls) => {
-                    const mins = minutesUntilStart(cls, new Date());
+                    const mins = minsUntilStart(cls);
                     return (
                       <div
                         key={cls.id}
                         className="p-4 bg-soft rounded-xl border border-light hover:border-primary-blue transition-colors"
                       >
                         <div className="flex items-start justify-between mb-2">
-                          <div className="flex-1">
+                          <div>
                             <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm text-primary-blue font-semibold">
+                              <span className="text-xs font-bold text-primary-blue">
                                 {cls.subject?.subject_code || "SUB"}
                               </span>
                               <span className="px-2 py-0.5 bg-orange-100 text-orange-600 rounded-full text-xs">
-                                Starts in {formatStartsIn(mins)}
+                                In {formatStartsIn(mins)}
                               </span>
                             </div>
-                            <h4 className="text-dark font-medium mb-1">
+                            <p className="text-sm font-medium text-dark">
                               {cls.subject?.subject_name || "Subject"}
-                            </h4>
-                            <p className="text-sm text-body">
+                            </p>
+                            <p className="text-xs text-body">
                               {cls.teacher?.full_name || "Teacher"}
                             </p>
                           </div>
                         </div>
-
-                        <div className="flex items-center justify-between text-xs text-body mt-3 pt-3 border-t border-light">
+                        <div className="flex items-center justify-between text-xs text-body pt-2.5 border-t border-light">
                           <span className="flex items-center gap-1">
                             <DoorOpen className="w-3 h-3" />
                             {cls.room?.room_name || "Room"}
                           </span>
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {String(cls.start_time).slice(0, 5)} - {String(cls.end_time).slice(0, 5)}
+                            {String(cls.start_time).slice(0, 5)} –{" "}
+                            {String(cls.end_time).slice(0, 5)}
                           </span>
                         </div>
                       </div>
@@ -722,81 +725,137 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Weekly Classes Chart (Trimester totals) */}
-          <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-            <div className="flex items-center gap-3 mb-6">
+          {/* ── Weekly chart ── */}
+          <div className="bg-white rounded-xl shadow-card p-5 border border-light">
+            <div className="flex items-center gap-2.5 mb-4">
               <div className="p-2 bg-purple-50 rounded-lg">
-                <TrendingUp className="w-5 h-5 text-purple-600" />
+                <TrendingUp className="w-4 h-4 text-purple-600" />
               </div>
               <div>
-                <h3 className="text-lg text-dark font-semibold">Weekly Classes Overview</h3>
-                <p className="text-sm text-body">Total classes by weekday inside selected trimester</p>
+                <h3 className="text-dark font-semibold text-sm">
+                  Weekly Classes
+                </h3>
+                <p className="text-xs text-body">
+                  Trimester total distribution by weekday
+                </p>
               </div>
             </div>
-
-            <div style={{ width: "100%", height: 320, minHeight: 320 }}>
-              <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={weeklyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                  <XAxis dataKey="day" stroke="#374151" style={{ fontSize: "12px" }} />
-                  <YAxis stroke="#374151" style={{ fontSize: "12px" }} />
+            {loading ? (
+              <ChartSkeleton />
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart
+                  data={weeklyData}
+                  margin={{ top: 4, right: 8, left: -16, bottom: 0 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#F3F4F6"
+                    vertical={false}
+                  />
+                  <XAxis
+                    dataKey="day"
+                    stroke="#9CA3AF"
+                    tick={{ fontSize: 12 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    stroke="#9CA3AF"
+                    tick={{ fontSize: 12 }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
                   <Tooltip
                     contentStyle={{
-                      backgroundColor: "#FFFFFF",
+                      backgroundColor: "#fff",
                       border: "1px solid #E5E7EB",
-                      borderRadius: "8px",
-                      boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+                      borderRadius: "10px",
+                      fontSize: 13,
                     }}
+                    cursor={{ fill: "#F9FAFB" }}
                   />
-                  <Bar dataKey="classes" fill="#2563EB" radius={[8, 8, 0, 0]} />
+                  <Bar
+                    dataKey="classes"
+                    name="Classes"
+                    fill="#2563EB"
+                    radius={[5, 5, 0, 0]}
+                    maxBarSize={40}
+                  />
                 </BarChart>
               </ResponsiveContainer>
-            </div>
+            )}
           </div>
 
-          {/* Room Bookings + Events (Today) */}
-          <div className="bg-white rounded-2xl shadow-card-lg p-6 border border-light">
-            <div className="flex items-center gap-3 mb-6">
+          {/* ── Today's Room Bookings ── */}
+          <div className="bg-white rounded-xl shadow-card p-5 border border-light">
+            <div className="flex items-center gap-2.5 mb-4">
               <div className="p-2 bg-indigo-50 rounded-lg">
-                <Building2 className="w-5 h-5 text-indigo-600" />
+                <Building2 className="w-4 h-4 text-indigo-600" />
               </div>
               <div>
-                <h3 className="text-lg text-dark font-semibold">Today's Room Bookings</h3>
-                <p className="text-sm text-body">
-                  {loadingRoomBookings ? "Loading..." : `${roomBookingsTodayApproved.length} approved bookings`}
+                <h3 className="text-dark font-semibold text-sm">
+                  Today's Room Bookings
+                </h3>
+                <p className="text-xs text-body">
+                  {loadingBookings
+                    ? "Loading…"
+                    : `${roomBookingsTodayApproved.length} approved today`}
                 </p>
               </div>
             </div>
 
-            {roomBookingsTodayApproved.length === 0 ? (
-              <div className="p-4 bg-soft rounded-xl border border-light text-body text-sm">
+            {loadingBookings ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {Array.from({ length: 2 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="p-4 bg-soft rounded-xl border border-light space-y-3"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-2">
+                        <div className="h-4 w-36 rounded bg-gray-200 animate-pulse" />
+                        <div className="h-3.5 w-24 rounded bg-gray-200 animate-pulse" />
+                      </div>
+                      <div className="h-5 w-16 rounded-lg bg-gray-200 animate-pulse" />
+                    </div>
+                    <div className="flex justify-between pt-2 border-t border-light">
+                      <div className="h-3 w-20 rounded bg-gray-200 animate-pulse" />
+                      <div className="h-3 w-20 rounded bg-gray-200 animate-pulse" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : roomBookingsTodayApproved.length === 0 ? (
+              <div className="text-center py-8 text-body text-sm bg-soft rounded-xl border border-light">
                 No approved room bookings for today.
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {roomBookingsTodayApproved.map((b) => (
                   <div
                     key={b.id}
                     className="p-4 bg-indigo-50 rounded-xl border border-indigo-200"
                   >
-                    <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-start justify-between mb-2.5">
                       <div>
-                        <h4 className="text-dark font-medium mb-1">{b.event_name}</h4>
-                        <p className="text-sm text-body">{b.organiser_name}</p>
+                        <p className="text-sm font-semibold text-dark">
+                          {b.event_name}
+                        </p>
+                        <p className="text-xs text-body">{b.organiser_name}</p>
                       </div>
-                      <span className="px-2 py-1 bg-green-100 text-green-700 rounded-lg text-xs font-medium">
+                      <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-lg text-xs font-medium flex-shrink-0">
                         Approved
                       </span>
                     </div>
-
-                    <div className="flex items-center justify-between text-xs text-body pt-3 border-t border-indigo-200">
+                    <div className="flex items-center justify-between text-xs text-body pt-2.5 border-t border-indigo-200">
                       <span className="flex items-center gap-1">
                         <Building2 className="w-3 h-3" />
                         {b.room?.room_name ?? `Room #${b.room_id}`}
                       </span>
                       <span className="flex items-center gap-1">
                         <Clock className="w-3 h-3" />
-                        {timeFromApi(b.start_time)} - {timeFromApi(b.end_time)}
+                        {timeFromApi(b.start_time)} – {timeFromApi(b.end_time)}
                       </span>
                     </div>
                   </div>
