@@ -145,10 +145,10 @@ SUCSS is a subscription-based class scheduling platform designed specifically fo
 3. Fill out the contact form
 4. Wait for admin approval
 5. Receive your private admin credentials
-6. Access the admin system via "Admin Demo" button
+6. Access the admin system via "Login" button
 
 ### For Demo
-Click the "Admin Demo" button in the header to instantly access the admin system with sample data.
+Click the "Login" button in the header to instantly access the admin system with sample data.
 
 ## 🎨 Color Coding
 

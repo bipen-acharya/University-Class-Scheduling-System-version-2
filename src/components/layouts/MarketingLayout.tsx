@@ -13,7 +13,7 @@ export default function MarketingLayout({ onAdminAccess }: MarketingLayoutProps)
   const navLinks = [
     { path: '/', label: 'Home' },
     { path: '/features', label: 'Features' },
-    { path: '/pricing', label: 'Pricing' },
+    // { path: '/pricing', label: 'Pricing' },
     { path: '/how-it-works', label: 'How It Works' },
     { path: '/about', label: 'About' },
     { path: '/contact', label: 'Contact' },
@@ -54,17 +54,17 @@ export default function MarketingLayout({ onAdminAccess }: MarketingLayoutProps)
 
             {/* CTA + Demo Admin Access */}
             <div className="hidden md:flex items-center gap-3">
-              <Link
+              {/* <Link
                 to="/contact"
                 className="px-5 py-2 text-primary-blue border border-primary-blue rounded-lg hover:bg-primary-blue hover:text-white transition-all"
               >
                 Request Access
-              </Link>
+              </Link> */}
               <Link
                 to="/auth"
                 className="px-5 py-2 bg-primary-blue text-white rounded-lg hover:opacity-90 transition-opacity shadow-card"
               >
-                Admin Demo
+                Login
               </Link>
             </div>
 
@@ -112,7 +112,7 @@ export default function MarketingLayout({ onAdminAccess }: MarketingLayoutProps)
                 onClick={() => setMobileMenuOpen(false)}
                 className="px-4 py-2 bg-primary-blue text-white rounded-lg hover:opacity-90 transition-opacity"
               >
-                Admin Demo
+                Login
               </Link>
             </nav>
           </div>
@@ -163,13 +163,13 @@ export default function MarketingLayout({ onAdminAccess }: MarketingLayoutProps)
                 <li><a href="#" className="hover:text-primary-blue">Privacy Policy</a></li>
                 <li><a href="#" className="hover:text-primary-blue">Terms of Service</a></li>
                 <li>
-                  <button
+                  {/* <button
                     onClick={onAdminAccess}
                     className="hover:text-primary-blue flex items-center gap-2 cursor-pointer bg-transparent border-none p-0 text-gray-300 text-sm"
                   >
                     <LayoutDashboard className="w-4 h-4" />
                     Admin Panel
-                  </button>
+                  </button> */}
                 </li>
               </ul>
             </div>

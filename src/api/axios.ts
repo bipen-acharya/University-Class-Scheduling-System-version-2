@@ -1,4 +1,7 @@
 import axios, { AxiosHeaders } from "axios";
+import { toast } from "sonner";
+
+let isRedirecting = false;
 
 const api = axios.create({
   baseURL: "https://unischeduling.com/api",
@@ -33,13 +36,20 @@ api.interceptors.response.use(
 
     const isAuthRequest = url.includes("/login") || url.includes("/register");
 
-    if (status === 401 && !isAuthRequest) {
+    if (status === 401 && !isAuthRequest && !isRedirecting) {
+      isRedirecting = true;
+
       localStorage.removeItem("token");
       localStorage.removeItem("user_name");
       localStorage.removeItem("roles");
 
-      alert("Session expired. Please login again.");
-      window.location.href = "/auth"; 
+      toast.error("Session expired. Please login again.", {
+        duration: 1200,
+      });
+
+      setTimeout(() => {
+        window.location.href = "/auth";
+      }, 1200);
     }
 
     return Promise.reject(error);

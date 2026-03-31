@@ -271,7 +271,7 @@ export default function ContactPage() {
                   </div>
                   <div>
                     <div className="text-sm text-gray-500 mb-1">Phone</div>
-                    <div className="text-[#0F172A]">+1 (800) UNI-SCHED</div>
+                    <div className="text-[#0F172A]">0434998549</div>
                   </div>
                 </div>
 
