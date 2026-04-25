@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Calendar, Building, Activity } from "lucide-react";
 import api from "../../api/axios";
+import { setStoredAuthUser, fetchMe } from "../../utils/auth";
 
 export default function AuthPage() {
   const navigate = useNavigate();
@@ -13,15 +14,15 @@ export default function AuthPage() {
     password: "",
   });
 
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
   const handleLoginChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setLoginData({
       ...loginData,
       [e.target.name]: e.target.value,
     });
   };
-
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,14 +33,28 @@ export default function AuthPage() {
       const response = await api.post("/login", {
         email: loginData.email,
         password: loginData.password,
+        remember_me: rememberMe,
       });
 
       if (response.data.status === 1) {
         const user = response.data.data;
 
+        // Store token
         localStorage.setItem("token", user.token);
+
+        // Optional legacy value if used elsewhere
         localStorage.setItem("user_name", user.name);
-        localStorage.setItem("roles", JSON.stringify(user.roles));
+
+        // Store full auth user for utils/auth
+        setStoredAuthUser({
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          roles: user.roles || [],
+        });
+
+        // Refresh auth user from backend /me for latest role/state
+        await fetchMe();
 
         navigate("/admin");
       } else {
@@ -78,6 +93,7 @@ export default function AuthPage() {
                   </div>
                 </div>
               </li>
+
               <li className="flex items-start gap-3">
                 <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center flex-shrink-0">
                   <Building className="w-5 h-5 text-white" />
@@ -89,6 +105,7 @@ export default function AuthPage() {
                   </div>
                 </div>
               </li>
+
               <li className="flex items-start gap-3">
                 <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center flex-shrink-0">
                   <Activity className="w-5 h-5 text-white" />
@@ -110,6 +127,7 @@ export default function AuthPage() {
                 <div className="w-2 h-2 bg-yellow-400 rounded-full"></div>
                 <div className="w-2 h-2 bg-red-400 rounded-full"></div>
               </div>
+
               <div className="space-y-2">
                 <div className="h-3 bg-white/20 rounded w-3/4"></div>
                 <div className="h-3 bg-white/20 rounded w-full"></div>
@@ -156,6 +174,7 @@ export default function AuthPage() {
                 >
                   Password
                 </label>
+
                 <div className="relative">
                   <input
                     type={showPassword ? "text" : "password"}
@@ -172,7 +191,11 @@ export default function AuthPage() {
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
                   >
-                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    {showPassword ? (
+                      <EyeOff className="w-5 h-5" />
+                    ) : (
+                      <Eye className="w-5 h-5" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -187,6 +210,7 @@ export default function AuthPage() {
                   />
                   <span className="text-sm text-[#0F172A]">Remember me</span>
                 </label>
+
                 <Link
                   to="/forgot-password"
                   className="text-sm text-[#2563EB] hover:underline"
@@ -217,7 +241,10 @@ export default function AuthPage() {
 
           {/* Mobile Branding */}
           <div className="lg:hidden mt-6 text-center">
-            <Link to="/" className="text-sm text-gray-600 hover:text-[#2563EB]">
+            <Link
+              to="/"
+              className="text-sm text-gray-600 hover:text-[#2563EB]"
+            >
               ← Back to UniScheduling
             </Link>
           </div>

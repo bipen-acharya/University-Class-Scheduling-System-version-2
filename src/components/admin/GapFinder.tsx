@@ -143,6 +143,7 @@ export default function GapFinder() {
   const [activeTab, setActiveTab] = useState<FinderTab>("classroom");
   const [showExportModal, setShowExportModal] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [exporting, setExporting] = useState(false); // ← NEW
 
   const [trimesters, setTrimesters] = useState<ApiTrimester[]>([]);
   const [selectedTrimesterId, setSelectedTrimesterId] = useState<string>("");
@@ -499,6 +500,53 @@ export default function GapFinder() {
     selectedRoomType
   );
 
+  // ─────────────────────────────────────────────
+  // Export PDF — calls /timetable/export-gap-pdf
+  // ─────────────────────────────────────────────
+  const handleExportPDF = async () => {
+    try {
+      setExporting(true);
+
+      const response = await api.get("/timetable/export-gap-pdf", {
+        params: {
+          view: activeTab,
+          day: activeTab !== "weekly" ? selectedDay : "",
+          trimister_id: selectedTrimesterId || "",
+          room_id: selectedRoomId || "",
+          programm_id: selectedProgramId || "",
+          subject_id: selectedSubjectId || "",
+          room_type: selectedRoomType || "",
+        },
+        responseType: "blob",
+      });
+
+      // Guard: make sure we actually got a PDF back
+      const contentType = response.headers["content-type"] || "";
+      if (!contentType.includes("application/pdf")) {
+        toast.error("Backend did not return a PDF. Please try again.");
+        return;
+      }
+
+      // Trigger browser download
+      const blob = new Blob([response.data], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `gap-finder-${activeTab}-${activeTab !== "weekly" ? selectedDay + "-" : ""}${selectedTrimesterId || "all"}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      toast.success("PDF downloaded successfully.");
+      setShowExportModal(false);
+    } catch {
+      toast.error("Failed to export PDF. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   /** ========================= Render ========================= */
   return (
     <div className="space-y-5">
@@ -512,10 +560,20 @@ export default function GapFinder() {
         </div>
         <button
           onClick={() => setShowExportModal(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 active:scale-[0.97] active:opacity-80 transition-all duration-150 shadow-md select-none cursor-pointer text-sm"
+          disabled={exporting}
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary-blue text-white rounded-xl hover:opacity-90 active:scale-[0.97] active:opacity-80 transition-all duration-150 shadow-md select-none cursor-pointer text-sm disabled:opacity-60"
         >
-          <Download className="w-4 h-4" />
-          Export PDF
+          {exporting ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Exporting…
+            </>
+          ) : (
+            <>
+              <Download className="w-4 h-4" />
+              Export PDF
+            </>
+          )}
         </button>
       </div>
 
@@ -794,7 +852,6 @@ export default function GapFinder() {
               const typeChanged = prevSlot && prevSlot.type !== slot.type;
               return (
                 <div key={index}>
-                  {/* Visual separator when switching between gap and busy */}
                   {typeChanged && (
                     <div className="flex items-center gap-2 my-1">
                       <div className="flex-1 h-px bg-gray-200" />
@@ -964,36 +1021,84 @@ export default function GapFinder() {
         <>
           <div
             className="fixed inset-0 bg-white/40 backdrop-blur-sm z-50"
-            onClick={() => setShowExportModal(false)}
+            onClick={() => !exporting && setShowExportModal(false)}
           />
           <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl max-w-md w-full shadow-2xl">
               <div className="border-b border-light px-6 py-4 flex items-center justify-between">
                 <h2 className="text-primary-blue">Export Gap Report</h2>
                 <button
-                  onClick={() => setShowExportModal(false)}
-                  className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer"
+                  onClick={() => !exporting && setShowExportModal(false)}
+                  disabled={exporting}
+                  className="p-2 hover:bg-soft rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <X className="w-5 h-5 text-body" />
                 </button>
               </div>
+
               <div className="p-6">
-                <p className="text-body text-sm mb-6">
-                  Export the current gap finder view as a PDF report.
+                {/* Summary of what will be exported */}
+                <div className="mb-5 p-3 bg-soft rounded-xl border border-light space-y-1.5 text-xs text-body">
+                  <div className="flex justify-between">
+                    <span>View</span>
+                    <span className="font-medium text-dark capitalize">
+                      {activeTab}
+                    </span>
+                  </div>
+                  {activeTab !== "weekly" && (
+                    <div className="flex justify-between">
+                      <span>Day</span>
+                      <span className="font-medium text-dark">
+                        {selectedDay}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span>Trimester</span>
+                    <span className="font-medium text-dark">
+                      {selectedTrimesterObj?.name || "All"}
+                    </span>
+                  </div>
+                  {selectedRoom && (
+                    <div className="flex justify-between">
+                      <span>Room</span>
+                      <span className="font-medium text-dark">
+                        {selectedRoom.room_name}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span>Sessions matched</span>
+                    <span className="font-medium text-dark">
+                      {filteredSessions.length}
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-body text-sm mb-5">
+                  Export the current gap finder view as a PDF report with the
+                  filters above applied.
                 </p>
+
                 <div className="flex gap-3">
                   <button
-                    onClick={() => {
-                      toast.success("PDF export triggered.");
-                      setShowExportModal(false);
-                    }}
-                    className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
+                    onClick={handleExportPDF}
+                    disabled={exporting}
+                    className="flex-1 py-3 bg-primary-blue text-white rounded-xl hover:opacity-90 active:opacity-80 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    Export PDF
+                    {exporting ? (
+                      <span className="inline-flex items-center gap-2 justify-center">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Exporting…
+                      </span>
+                    ) : (
+                      "Export PDF"
+                    )}
                   </button>
                   <button
                     onClick={() => setShowExportModal(false)}
-                    className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer"
+                    disabled={exporting}
+                    className="flex-1 py-3 bg-gray-100 text-body rounded-xl hover:bg-gray-200 active:bg-gray-300 active:scale-[0.98] transition-all duration-150 font-medium cursor-pointer disabled:opacity-50"
                   >
                     Cancel
                   </button>

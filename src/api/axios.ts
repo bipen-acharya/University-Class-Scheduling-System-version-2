@@ -34,7 +34,9 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const url = error.config?.url || "";
 
-    const isAuthRequest = url.includes("/login") || url.includes("/register");
+    const isAuthRequest =
+      url.includes("/login") ||
+      url.includes("/register");
 
     if (status === 401 && !isAuthRequest && !isRedirecting) {
       isRedirecting = true;
@@ -42,6 +44,7 @@ api.interceptors.response.use(
       localStorage.removeItem("token");
       localStorage.removeItem("user_name");
       localStorage.removeItem("roles");
+      localStorage.removeItem("auth_user");
 
       toast.error("Session expired. Please login again.", {
         duration: 1200,
