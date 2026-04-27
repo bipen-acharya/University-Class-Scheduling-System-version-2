@@ -34,9 +34,7 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const url = error.config?.url || "";
 
-    const isAuthRequest =
-      url.includes("/login") ||
-      url.includes("/register");
+    const isAuthRequest = url.includes("/login") || url.includes("/register");
 
     if (status === 401 && !isAuthRequest && !isRedirecting) {
       isRedirecting = true;
@@ -57,6 +55,30 @@ api.interceptors.response.use(
 
     return Promise.reject(error);
   },
+);
+
+api.interceptors.request.use(
+  (config) => {
+    const isPublicRoute = config.url?.includes("/contacts");
+
+    if (isPublicRoute) {
+      return config;
+    }
+
+    const token = localStorage.getItem("token");
+    if (!token) return config;
+
+    const headers =
+      config.headers instanceof AxiosHeaders
+        ? config.headers
+        : new AxiosHeaders(config.headers);
+
+    headers.set("Authorization", `Bearer ${token}`);
+    config.headers = headers;
+
+    return config;
+  },
+  (error) => Promise.reject(error),
 );
 
 export default api;

@@ -144,7 +144,7 @@ export default function MarketingLayout({ onAdminAccess }: MarketingLayoutProps)
               <h3 className="mb-4 font-semibold">Product</h3>
               <ul className="space-y-2 text-sm text-gray-300">
                 <li><Link to="/features" className="hover:text-primary-blue">Features</Link></li>
-                <li><Link to="/pricing" className="hover:text-primary-blue">Pricing</Link></li>
+                {/* <li><Link to="/pricing" className="hover:text-primary-blue">Pricing</Link></li> */}
                 <li><Link to="/how-it-works" className="hover:text-primary-blue">How It Works</Link></li>
               </ul>
             </div>

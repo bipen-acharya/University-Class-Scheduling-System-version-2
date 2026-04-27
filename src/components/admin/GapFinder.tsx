@@ -156,7 +156,7 @@ export default function GapFinder() {
     "lecture_hall" | "lab" | "seminar_room" | ""
   >("");
 
-  const [rooms, setRooms] = useState<ApiRoom[]>([]);
+  const [rooms, setRooms] = useState<ApiRoom[]>([]);   
   const [subjects, setSubjects] = useState<ApiSubject[]>([]);
   const [teachers, setTeachers] = useState<ApiTeacher[]>([]);
   const [programms, setProgramms] = useState<ApiProgramm[]>([]);
